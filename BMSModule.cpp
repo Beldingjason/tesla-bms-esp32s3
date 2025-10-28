@@ -2,6 +2,7 @@
 #include "BMSModule.h"
 #include "BMSUtil.h"
 #include "Logger.h"
+#include "constants.h"
 
 
 BMSModule::BMSModule()
@@ -9,16 +10,16 @@ BMSModule::BMSModule()
     for (int i = 0; i < 6; i++)
     {
         cellVolt[i] = 0.0f;
-        lowestCellVolt[i] = 5.0f;
-        highestCellVolt[i] = 0.0f;
+        lowestCellVolt[i] = CELL_VOLTAGE_INIT_HIGH;
+        highestCellVolt[i] = CELL_VOLTAGE_INIT_LOW;
     }
     moduleVolt = 0.0f;
     temperatures[0] = 0.0f;
     temperatures[1] = 0.0f;
-    lowestTemperature = 200.0f;
-    highestTemperature = -100.0f;
-    lowestModuleVolt = 200.0f;
-    highestModuleVolt = 0.0f;
+    lowestTemperature = TEMP_INIT_LOW;
+    highestTemperature = TEMP_INIT_HIGH;
+    lowestModuleVolt = MODULE_VOLTAGE_INIT_HIGH;
+    highestModuleVolt = MODULE_VOLTAGE_INIT_LOW;
     exists = false;
     moduleAddress = 0;
 }
@@ -122,12 +123,12 @@ bool BMSModule::readModuleValues()
         if (buff[0] == (moduleAddress << 1) && buff[1] == REG_GPAI && buff[2] == 0x12) //Also ensure this is actually the reply to our intended query
         {
             //payload is 2 bytes gpai, 2 bytes for each of 6 cell voltages, 2 bytes for each of two temperatures (18 bytes of data)
-            moduleVolt = (buff[3] * 256 + buff[4]) * 0.002034609f;
+            moduleVolt = (buff[3] * 256 + buff[4]) * VOLTAGE_CONVERSION_MODULE;
             if (moduleVolt > highestModuleVolt) highestModuleVolt = moduleVolt;
-            if (moduleVolt < lowestModuleVolt) lowestModuleVolt = moduleVolt;            
-            for (int i = 0; i < 6; i++) 
+            if (moduleVolt < lowestModuleVolt) lowestModuleVolt = moduleVolt;
+            for (int i = 0; i < 6; i++)
             {
-                cellVolt[i] = (buff[5 + (i * 2)] * 256 + buff[6 + (i * 2)]) * 0.000381493f;
+                cellVolt[i] = (buff[5 + (i * 2)] * 256 + buff[6 + (i * 2)]) * VOLTAGE_CONVERSION_CELL;
                 if (lowestCellVolt[i] > cellVolt[i] && cellVolt[i] >= IgnoreCell) lowestCellVolt[i] = cellVolt[i];
                 if (highestCellVolt[i] < cellVolt[i]) highestCellVolt[i] = cellVolt[i];
             }
@@ -135,14 +136,14 @@ bool BMSModule::readModuleValues()
             //Now using steinhart/hart equation for temperatures. We'll see if it is better than old code.
             tempTemp = (1.78f / ((buff[17] * 256 + buff[18] + 2) / 33046.0f) - 3.57f);
             tempTemp *= 1000.0f;
-            tempCalc =  1.0f / (0.0007610373573f + (0.0002728524832 * logf(tempTemp)) + (powf(logf(tempTemp), 3) * 0.0000001022822735f));            
-            
-            temperatures[0] = tempCalc - 273.15f;            
-            
+            tempCalc =  1.0f / (0.0007610373573f + (0.0002728524832 * logf(tempTemp)) + (powf(logf(tempTemp), 3) * 0.0000001022822735f));
+
+            temperatures[0] = tempCalc - TEMP_KELVIN_OFFSET;
+
             tempTemp = 1.78f / ((buff[19] * 256 + buff[20] + 9) / 33068.0f) - 3.57f;
             tempTemp *= 1000.0f;
             tempCalc = 1.0f / (0.0007610373573f + (0.0002728524832 * logf(tempTemp)) + (powf(logf(tempTemp), 3) * 0.0000001022822735f));
-            temperatures[1] = tempCalc - 273.15f;
+            temperatures[1] = tempCalc - TEMP_KELVIN_OFFSET;
             
             if (getLowTemp() < lowestTemperature) lowestTemperature = getLowTemp();
             if (getHighTemp() > highestTemperature) highestTemperature = getHighTemp();
@@ -191,7 +192,7 @@ float BMSModule::getAverageV()
 {
     int x =0;
     float avgVal = 0.0f;
-    for (int i = 0; i < 6; i++) 
+    for (int i = 0; i < 6; i++)
     {
       if (cellVolt[i] > IgnoreCell)
       {
@@ -199,9 +200,11 @@ float BMSModule::getAverageV()
         avgVal += cellVolt[i];
       }
     }
-    
-    avgVal /= x;
-    return avgVal;    
+
+    if (x > 0) {
+        avgVal /= x;
+    }
+    return avgVal;
 }
 
 float BMSModule::getHighestModuleVolt()

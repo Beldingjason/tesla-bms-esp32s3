@@ -1,4 +1,5 @@
-#pragma once
+#ifndef BMS_CONFIG_H_
+#define BMS_CONFIG_H_
 
 // UPDATE THESE VALUES TO YOUR OWN CONFIGURATION
 // This is currently set for a 48V system (2 Tesla modules in series)
@@ -65,3 +66,5 @@ typedef struct {
   float balanceVoltage;
   float balanceHyst;
 } EEPROMSettings;
+
+#endif // BMS_CONFIG_H_

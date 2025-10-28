@@ -8,12 +8,17 @@
 #include "esp_lcd_panel_vendor.h"
 #include "factory_gui.h"
 #include "pin_config.h"
+#include "constants.h"
 #include "sntp.h"
 #include "time.h"
 
 #include "driver/gpio.h"
+#include "esp_task_wdt.h"
 #include "HardwareSerial.h"
 HardwareSerial SERIALBMS(0);
+
+// Watchdog timeout in seconds
+#define WDT_TIMEOUT 10
 
 #include "BMSModuleManager.h" 
 #include "Logger.h"
@@ -54,6 +59,10 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
 void setup() {
   pinMode(PIN_POWER_ON, OUTPUT);
   digitalWrite(PIN_POWER_ON, HIGH);
+
+  // Initialize watchdog timer
+  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_add(NULL); // Add current thread to WDT watch
   Serial.begin(115200);
 
 #if USE_WIFI
@@ -117,18 +126,22 @@ void setup() {
   esp_lcd_panel_mirror(panel_handle, false, true);
   // the gap is LCD panel specific, even panels with the same driver IC, can
   // have different gap value
-  esp_lcd_panel_set_gap(panel_handle, 0, 35);
+  esp_lcd_panel_set_gap(panel_handle, 0, LCD_PANEL_GAP_OFFSET);
 
   /* Lighten the screen with gradient */
-  ledcSetup(0, 10000, 8);
-  ledcAttachPin(PIN_LCD_BL, 0);
-  for (uint8_t i = 0; i < 0xFF; i++) {
-    ledcWrite(0, i);
-    delay(2);
+  ledcSetup(LCD_BACKLIGHT_PWM_CHANNEL, LCD_BACKLIGHT_PWM_FREQ, LCD_BACKLIGHT_PWM_RESOLUTION);
+  ledcAttachPin(PIN_LCD_BL, LCD_BACKLIGHT_PWM_CHANNEL);
+  for (uint8_t i = 0; i < LCD_BACKLIGHT_MAX_BRIGHTNESS; i++) {
+    ledcWrite(LCD_BACKLIGHT_PWM_CHANNEL, i);
+    delay(BMS_COMMAND_DELAY_MS);
   }
 
   lv_init();
   lv_disp_buf = (lv_color_t *)heap_caps_malloc(LVGL_LCD_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+  if (lv_disp_buf == NULL) {
+    SERIALCONSOLE.println("ERROR: Failed to allocate LVGL display buffer!");
+    while(1) { delay(1000); } // Halt execution
+  }
 
   lv_disp_draw_buf_init(&disp_buf, lv_disp_buf, NULL, LVGL_LCD_BUF_SIZE);
   /*Initialize the display*/
@@ -149,9 +162,12 @@ void setup() {
   wifi_test();
 #else
   ui_begin();
-  
-  // Wait for BMS to initialize
-  delay(3000);
+
+  // Wait for BMS to initialize (reset watchdog during long delay)
+  for (int i = 0; i < STARTUP_DELAY_MS / 1000; i++) {
+    delay(1000);
+    esp_task_wdt_reset();
+  }
 #endif
 
   bms.renumberBoardIDs();
@@ -163,22 +179,22 @@ void setup() {
   bms.setPstrings(BMS_NUM_PARALLEL);
   //bms.setSensors(settings.IgnoreTemp, settings.IgnoreVolt); 
 
-  last_tick2 = millis() + 5000;
+  last_tick2 = millis() + PAGE_SWITCH_INTERVAL_MS;
 }
 
 void loop() {
   lv_timer_handler();
+  esp_task_wdt_reset(); // Reset watchdog timer
 
   // process BMS data
   static uint32_t looptime = 0;
-  if (millis() - looptime > 500)
+  if (millis() - looptime > LOOP_INTERVAL_MS)
   {
     looptime = millis();
     bms.getAllVoltTemp();
 
     // check if balancing is needed
     // 5mns between balance events.
-    constexpr int BALANCE_TIME_MS = (5 * 60 * 1000);
     static int is_balancing = 0;
     static uint32_t last_balance_ms = 0;
     if (last_balance_ms > 0 && ((millis() - last_balance_ms) > BALANCE_TIME_MS))
@@ -200,9 +216,9 @@ void loop() {
       bms_status += "\n\n*** BALANCING ***";
     }
   }
-      
-  static uint32_t last_tick;
-  if ((millis() - last_tick) > 5000) 
+
+  static uint32_t last_tick = 0;
+  if ((millis() - last_tick) > GUI_UPDATE_INTERVAL_MS)
   {
 #if USE_WIFI
     struct tm timeinfo;
@@ -211,20 +227,20 @@ void loop() {
       lv_msg_send(MSG_NEW_MIN, &timeinfo.tm_min);
     }
 #endif
-    uint32_t volt = (analogRead(PIN_BAT_VOLT) * 2 * 3.3 * 1000) / 4096;
+    uint32_t volt = (analogRead(PIN_BAT_VOLT) * BAT_VOLTAGE_DIVIDER_RATIO * ADC_REFERENCE_VOLTAGE * 1000) / ADC_RESOLUTION;
     lv_msg_send(MSG_NEW_VOLT, &volt);
 
     last_tick = millis();
   }
 
-  if (millis() > last_tick2 && ((millis() - last_tick2) > 5000))
+  if ((millis() - last_tick2) > PAGE_SWITCH_INTERVAL_MS)
   {
     ui_switch_page();
     last_tick2 = millis();
   }
 
-  static uint32_t last_tick3;
-  if ((millis() - last_tick3) > 1000)
+  static uint32_t last_tick3 = 0;
+  if ((millis() - last_tick3) > STATUS_UPDATE_INTERVAL_MS)
   {
     lv_label_set_text(bms_label, (bms_status + "\n\n" + bms_modules_text).c_str());
     last_tick3 = millis();

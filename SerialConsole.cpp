@@ -105,9 +105,9 @@ void SerialConsole::serialEvent() {
     handleConsoleCmd();
     ptrBuffer = 0; //reset line counter once the line has been processed
   } else {
-    cmdBuffer[ptrBuffer++] = (unsigned char) incoming;
-    if (ptrBuffer > 79)
-      ptrBuffer = 79;
+    if (ptrBuffer < 79) {
+      cmdBuffer[ptrBuffer++] = (unsigned char) incoming;
+    }
   }
 }
 

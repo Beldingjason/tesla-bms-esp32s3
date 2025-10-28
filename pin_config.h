@@ -1,4 +1,5 @@
-#pragma once
+#ifndef PIN_CONFIG_H_
+#define PIN_CONFIG_H_
 
 #define USE_WIFI                      0
 // #define WIFI_SSID                    "Your-ssid"
@@ -42,9 +43,11 @@
 #define PIN_BUTTON_1                 0
 #define PIN_BUTTON_2                 14
 #define PIN_BAT_VOLT                 4
+#define PIN_BMS_FAULT                11
 
 #define PIN_IIC_SCL                  17
 #define PIN_IIC_SDA                  18
 
 #define PIN_TOUCH_INT                16
 #define PIN_TOUCH_RES                21
+#endif // PIN_CONFIG_H_

@@ -3,6 +3,7 @@
 #include "BMSUtil.h"
 #include "Logger.h"
 #include "pin_config.h"
+#include "constants.h"
 
 extern EEPROMSettings settings;
 extern String bms_status;
@@ -15,8 +16,8 @@ BMSModuleManager::BMSModuleManager()
     }
     lowestPackVolt = 1000.0f;
     highestPackVolt = 0.0f;
-    lowestPackTemp = 200.0f;
-    highestPackTemp = -100.0f;
+    lowestPackTemp = TEMP_INIT_LOW;
+    highestPackTemp = TEMP_INIT_HIGH;
     isFaulted = false;
 }
 
@@ -43,33 +44,33 @@ void BMSModuleManager::balanceCells()
         {
             payload[0] = address << 1;
             payload[1] = REG_BAL_TIME;
-            payload[2] = 60; //60 second balance limit, if not triggered to balance it will stop after 5 seconds
+            payload[2] = BMS_BALANCE_TIME_LIMIT_SEC; //60 second balance limit, if not triggered to balance it will stop after 5 seconds
             BMSUtil::sendData(payload, 3, true);
-            delay(2);
+            delay(BMS_COMMAND_DELAY_MS);
             BMSUtil::getReply(buff, 30);
 
             payload[0] = address << 1;
             payload[1] = REG_BAL_CTRL;
             payload[2] = balance; //write balance state to register
             BMSUtil::sendData(payload, 3, true);
-            delay(2);
+            delay(BMS_COMMAND_DELAY_MS);
             BMSUtil::getReply(buff, 30);
 
             if (Logger::isDebug()) //read registers back out to check if everthing is good
             {
-                delay(50);
+                delay(BMS_READ_DELAY_MS);
                 payload[0] = address << 1;
                 payload[1] = REG_BAL_TIME;
                 payload[2] = 1; //
                 BMSUtil::sendData(payload, 3, false);
-                delay(2);
+                delay(BMS_COMMAND_DELAY_MS);
                 BMSUtil::getReply(buff, 30);
-         
+
                 payload[0] = address << 1;
                 payload[1] = REG_BAL_CTRL;
                 payload[2] = 1; //
                 BMSUtil::sendData(payload, 3, false);
-                delay(2);
+                delay(BMS_COMMAND_DELAY_MS);
                 BMSUtil::getReply(buff, 30);
             }
         }
@@ -108,7 +109,7 @@ void BMSModuleManager::setupBoards()
             {
                 Logger::debug("00 found");
                 //look for a free address to use
-                for (int y = 1; y < 63; y++) 
+                for (int y = 1; y < MAX_BMS_MODULES; y++) 
                 {
                     if (!modules[y].isExisting())
                     {
@@ -177,7 +178,7 @@ void BMSModuleManager::renumberBoardIDs()
     uint8_t buff[8];
     int attempts = 1;
 
-    for (int y = 1; y < 63; y++) 
+    for (int y = 1; y < MAX_BMS_MODULES; y++) 
     {
         modules[y].setExists(false);  
         numFoundModules = 0;
@@ -239,7 +240,7 @@ void BMSModuleManager::sleepBoards()
     payload[1] = REG_IO_CTRL;//IO ctrl start
     payload[2] = 0x04;//write sleep bit
     BMSUtil::sendData(payload, 3, true);
-    delay(2);
+    delay(BMS_COMMAND_DELAY_MS);
     BMSUtil::getReply(buff, 8);
 }
 
@@ -255,28 +256,28 @@ void BMSModuleManager::wakeBoards()
     payload[1] = REG_IO_CTRL;//IO ctrl start
     payload[2] = 0x00;//write sleep bit
     BMSUtil::sendData(payload, 3, true);
-    delay(2);
+    delay(BMS_COMMAND_DELAY_MS);
     BMSUtil::getReply(buff, 8);
   
     payload[0] = 0x7F; //broadcast
     payload[1] = REG_ALERT_STATUS;//Fault Status
     payload[2] = 0x04;//data to cause a reset
     BMSUtil::sendData(payload, 3, true);
-    delay(2);
+    delay(BMS_COMMAND_DELAY_MS);
     BMSUtil::getReply(buff, 8);
     payload[0] = 0x7F; //broadcast
     payload[2] = 0x00;//data to clear
     BMSUtil::sendData(payload, 3, true);
-    delay(2);
+    delay(BMS_COMMAND_DELAY_MS);
     BMSUtil::getReply(buff, 8);
 }
 
 static float getSoC(float v)
 {
   v /= BMS_NUM_SERIES;
-  v -= 18.00f;
+  v -= SOC_MIN_CELL_VOLTAGE;
   v *= 100;
-  v /= (25.2f - 18.00f);
+  v /= (SOC_MAX_CELL_VOLTAGE - SOC_MIN_CELL_VOLTAGE);
   return v;
 }
 
@@ -318,7 +319,7 @@ void BMSModuleManager::getAllVoltTemp()
     bms_status = String("SoC: ") + (int)getSoC(packVolt) + " %\n\n";
     bms_status += String("Volts: ") + packVolt + "v low:" + lowCell + "v high: " + highCell + "v d=" + delta;
 
-    if (digitalRead(11) == LOW) {
+    if (digitalRead(PIN_BMS_FAULT) == LOW) {
         if (!isFaulted) Logger::error("One or more BMS modules have entered the fault state!");
         isFaulted = true;
     }
@@ -344,12 +345,12 @@ float BMSModuleManager::getLowCellVolt()
 
 float BMSModuleManager::getHighCellVolt()
 {
-  HighCellVolt = 5.0;
+  HighCellVolt = 0.0;
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
-        if (modules[x].isExisting()) 
+        if (modules[x].isExisting())
         {
-           if (modules[x].getHighCellV() <  HighCellVolt)  HighCellVolt = modules[x].getHighCellV(); 
+           if (modules[x].getHighCellV() >  HighCellVolt)  HighCellVolt = modules[x].getHighCellV();
         }
     }
     return HighCellVolt;
@@ -395,12 +396,12 @@ void BMSModuleManager::setSensors(int sensor,float Ignore)
 float BMSModuleManager::getAvgTemperature()
 {
     float avg = 0.0f;
-    int y = 0; //counter for modules below -70 (no sensors connected)    
+    int y = 0; //counter for modules below -70 (no sensors connected)
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
-        if (modules[x].isExisting()) 
+        if (modules[x].isExisting())
         {
-          if (modules[x].getAvgTemp() > -70) 
+          if (modules[x].getAvgTemp() > -70)
           {
             avg += modules[x].getAvgTemp();
           }
@@ -410,21 +411,26 @@ float BMSModuleManager::getAvgTemperature()
           }
         }
     }
-    avg = avg / (float)(numFoundModules-y);
-    
+    int validModules = numFoundModules - y;
+    if (validModules > 0) {
+        avg = avg / (float)validModules;
+    }
+
     return avg;
 }
 
 float BMSModuleManager::getAvgCellVolt()
 {
-    float avg = 0.0f;    
+    float avg = 0.0f;
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
         if (modules[x].isExisting()) avg += modules[x].getAverageV();
     }
-    avg = avg / (float)numFoundModules;
-    
-    return avg;    
+    if (numFoundModules > 0) {
+        avg = avg / (float)numFoundModules;
+    }
+
+    return avg;
 }
 
 void BMSModuleManager::printPackSummary()
@@ -443,7 +449,7 @@ void BMSModuleManager::printPackSummary()
     Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV     Avg Temp: %fC ", numFoundModules, 
                     getPackVoltage(),getAvgCellVolt(), getAvgTemperature());
     Logger::console("");
-    for (int y = 1; y < 63; y++)
+    for (int y = 1; y < MAX_BMS_MODULES; y++)
     {
         if (modules[y].isExisting())
         {
@@ -560,7 +566,7 @@ void BMSModuleManager::printPackDetails()
     Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV  Low Cell Voltage: %fV   High Cell Voltage: %fV   Avg Temp: %fC ", numFoundModules, 
                     getPackVoltage(),getAvgCellVolt(),LowCellVolt, HighCellVolt, getAvgTemperature());
     Logger::console("");
-    for (int y = 1; y < 63; y++)
+    for (int y = 1; y < MAX_BMS_MODULES; y++)
     {
         if (modules[y].isExisting())
         {
@@ -593,113 +599,3 @@ void BMSModuleManager::printPackDetails()
         }
     }
 }
-
-/*
-void BMSModuleManager::processCANMsg(CAN_FRAME &frame)
-{
-    uint8_t battId = (frame.id >> 16) & 0xF;
-    uint8_t moduleId = (frame.id >> 8) & 0xFF;
-    uint8_t cellId = (frame.id) & 0xFF;
-    
-    if (moduleId = 0xFF)  //every module
-    {
-        if (cellId == 0xFF) sendBatterySummary();        
-        else 
-        {
-            for (int i = 1; i <= MAX_MODULE_ADDR; i++) 
-            {
-                if (modules[i].isExisting()) 
-                {
-                    sendCellDetails(i, cellId);
-                    delayMicroseconds(500);
-                }
-            }
-        }
-    }
-    else //a specific module
-    {
-        if (cellId == 0xFF) sendModuleSummary(moduleId);
-        else sendCellDetails(moduleId, cellId);
-    }
-}
-
-void BMSModuleManager::sendBatterySummary()
-{
-    CAN_FRAME outgoing;
-    outgoing.id = (0x1BA00000ul) + ((batteryID & 0xF) << 16) + 0xFFFF;
-    outgoing.rtr = 0;
-    outgoing.priority = 1;
-    outgoing.extended = true;
-    outgoing.length = 8;
-
-    uint16_t battV = uint16_t(getPackVoltage() * 100.0f);
-    outgoing.data.byte[0] = battV & 0xFF;
-    outgoing.data.byte[1] = battV >> 8;
-    outgoing.data.byte[2] = 0;  //instantaneous current. Not measured at this point
-    outgoing.data.byte[3] = 0;
-    outgoing.data.byte[4] = 50; //state of charge
-    int avgTemp = (int)getAvgTemperature() + 40;
-    if (avgTemp < 0) avgTemp = 0;
-    outgoing.data.byte[5] = avgTemp;
-    avgTemp = (int)lowestPackTemp + 40;
-    if (avgTemp < 0) avgTemp = 0;    
-    outgoing.data.byte[6] = avgTemp;
-    avgTemp = (int)highestPackTemp + 40;
-    if (avgTemp < 0) avgTemp = 0;        
-    outgoing.data.byte[7] = avgTemp;
-    Can0.sendFrame(outgoing);
-}
-
-void BMSModuleManager::sendModuleSummary(int module)
-{
-    CAN_FRAME outgoing;
-    outgoing.id = (0x1BA00000ul) + ((batteryID & 0xF) << 16) + ((module & 0xFF) << 8) + 0xFF;
-    outgoing.rtr = 0;
-    outgoing.priority = 1;
-    outgoing.extended = true;
-    outgoing.length = 8;
-
-    uint16_t battV = uint16_t(modules[module].getModuleVoltage() * 100.0f);
-    outgoing.data.byte[0] = battV & 0xFF;
-    outgoing.data.byte[1] = battV >> 8;
-    outgoing.data.byte[2] = 0;  //instantaneous current. Not measured at this point
-    outgoing.data.byte[3] = 0;
-    outgoing.data.byte[4] = 50; //state of charge
-    int avgTemp = (int)modules[module].getAvgTemp() + 40;
-    if (avgTemp < 0) avgTemp = 0;
-    outgoing.data.byte[5] = avgTemp;
-    avgTemp = (int)modules[module].getLowestTemp() + 40;
-    if (avgTemp < 0) avgTemp = 0;
-    outgoing.data.byte[6] = avgTemp;
-    avgTemp = (int)modules[module].getHighestTemp() + 40;
-    if (avgTemp < 0) avgTemp = 0;    
-    outgoing.data.byte[7] = avgTemp;
-
-    Can0.sendFrame(outgoing);    
-}
-
-void BMSModuleManager::sendCellDetails(int module, int cell)
-{
-    CAN_FRAME outgoing;
-    outgoing.id = (0x1BA00000ul) + ((batteryID & 0xF) << 16) + ((module & 0xFF) << 8) + (cell & 0xFF);
-    outgoing.rtr = 0;
-    outgoing.priority = 1;
-    outgoing.extended = true;
-    outgoing.length = 8;
-    
-    uint16_t battV = uint16_t(modules[module].getCellVoltage(cell) * 100.0f);
-    outgoing.data.byte[0] = battV & 0xFF;
-    outgoing.data.byte[1] = battV >> 8;
-    battV = uint16_t(modules[module].getHighestCellVolt(cell) * 100.0f);
-    outgoing.data.byte[2] = battV & 0xFF;
-    outgoing.data.byte[3] = battV >> 8;
-    battV = uint16_t(modules[module].getLowestCellVolt(cell) * 100.0f);
-    outgoing.data.byte[4] = battV & 0xFF;
-    outgoing.data.byte[5] = battV >> 8;
-    int instTemp = modules[module].getHighTemp() + 40;
-    outgoing.data.byte[6] = instTemp; // should be nearest temperature reading not highest but this works too.
-    outgoing.data.byte[7] = 0; //Bit encoded fault data. No definitions for this yet.
-    
-    Can0.sendFrame(outgoing);
-}
-*/

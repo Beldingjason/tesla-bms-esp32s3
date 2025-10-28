@@ -1,3 +1,6 @@
+#ifndef BMSUTIL_H_
+#define BMSUTIL_H_
+
 #include <Arduino.h>
 #include "Logger.h"
 
@@ -94,3 +97,5 @@ public:
         return returnedLength; //failed to get a proper response.
     }
 };
+
+#endif // BMSUTIL_H_

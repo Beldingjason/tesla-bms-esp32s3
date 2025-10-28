@@ -1,4 +1,5 @@
-#pragma once
+#ifndef BMSMODULE_H_
+#define BMSMODULE_H_
 
  #include <stdint.h>
  
@@ -54,3 +55,5 @@ class BMSModule
     int sensor;
     uint8_t moduleAddress;     //1 to 0x3E
 };
+
+#endif // BMSMODULE_H_

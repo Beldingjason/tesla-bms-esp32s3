@@ -1,4 +1,5 @@
-#pragma once
+#ifndef FACTORY_GUI_H_
+#define FACTORY_GUI_H_
 
 #include "pin_config.h"
 
@@ -28,3 +29,4 @@
 
 void ui_begin();
 void ui_switch_page(void);
+#endif // FACTORY_GUI_H_

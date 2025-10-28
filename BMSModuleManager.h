@@ -1,4 +1,6 @@
-#pragma once
+#ifndef BMSMODULEMANAGER_H_
+#define BMSMODULEMANAGER_H_
+
 #include "bms_config.h"
 #include "BMSModule.h"
 
@@ -55,5 +57,7 @@ private:
     void sendModuleSummary(int module);
     void sendCellDetails(int module, int cell);
     */
-    
+
 };
+
+#endif // BMSMODULEMANAGER_H_
