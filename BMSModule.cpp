@@ -21,6 +21,12 @@ BMSModule::BMSModule()
     lowestModuleVolt = MODULE_VOLTAGE_INIT_HIGH;
     highestModuleVolt = MODULE_VOLTAGE_INIT_LOW;
     exists = false;
+    alerts = 0;
+    faults = 0;
+    COVFaults = 0;
+    CUVFaults = 0;
+    IgnoreCell = 0.0f;
+    sensor = 0;
     moduleAddress = 0;
 }
 
@@ -112,13 +118,18 @@ bool BMSModule::readModuleValues()
     payload[1] = REG_GPAI; //start reading registers at the module voltage registers
     payload[2] = 0x12; //read 18 bytes (Each value takes 2 - ModuleV, CellV1-6, Temp1, Temp2)
     retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, 22);
-            
+    if (retLen != 22)
+    {
+        Logger::warn("Module %i returned unexpected length: %i", moduleAddress, retLen);
+        return retVal;
+    }
+
     calcCRC = BMSUtil::genCRC(buff, retLen-1);
     Logger::debug("Sent CRC: %x     Calculated CRC: %x", buff[21], calcCRC);
 
     //18 data bytes, address, command, length, and CRC = 22 bytes returned
     //Also validate CRC to ensure we didn't get garbage data.
-    if ( (retLen == 22) && (buff[21] == calcCRC) )
+    if (buff[21] == calcCRC)
     {
         if (buff[0] == (moduleAddress << 1) && buff[1] == REG_GPAI && buff[2] == 0x12) //Also ensure this is actually the reply to our intended query
         {
@@ -151,6 +162,11 @@ bool BMSModule::readModuleValues()
             Logger::debug("Got voltage and temperature readings");
             retVal = true;
         }        
+        else
+        {
+            Logger::error("Unexpected reply header for module %i (addr=%x cmd=%x len=%x)", 
+                          moduleAddress, buff[0], buff[1], buff[2]);
+        }
     }
     else
     {
@@ -302,4 +318,3 @@ void BMSModule::setIgnoreCell(float Ignore)
 {
   IgnoreCell = Ignore;
 }
-

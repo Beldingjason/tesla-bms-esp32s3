@@ -56,7 +56,7 @@ void ui_begin() {
   lv_label_set_text(hour_text, "12");
   lv_obj_set_style_text_color(hour_text, UI_FONT_COLOR, 0);
   lv_obj_add_event_cb(hour_text, update_text_subscriber_cb, LV_EVENT_MSG_RECEIVED, NULL);
-  lv_msg_subsribe_obj(MSG_NEW_HOUR, hour_text, (void *)"%02d");
+  lv_msg_subscribe_obj(MSG_NEW_HOUR, hour_text, (void *)"%02d");
 
   lv_obj_t *min_text = lv_label_create(min_cout);
   lv_obj_center(min_text);
@@ -64,7 +64,7 @@ void ui_begin() {
   lv_label_set_text(min_text, "34");
   lv_obj_set_style_text_color(min_text, UI_FONT_COLOR, 0);
   lv_obj_add_event_cb(min_text, update_text_subscriber_cb, LV_EVENT_MSG_RECEIVED, NULL);
-  lv_msg_subsribe_obj(MSG_NEW_MIN, min_text, (void *)"%02d");
+  lv_msg_subscribe_obj(MSG_NEW_MIN, min_text, (void *)"%02d");
 
   static lv_style_t style_line;
   lv_style_init(&style_line);
@@ -98,7 +98,7 @@ void ui_begin() {
   lv_obj_t *bat_label = lv_label_create(tv3);
   lv_obj_align_to(bat_label, debug_label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
   lv_obj_add_event_cb(bat_label, update_text_subscriber_cb, LV_EVENT_MSG_RECEIVED, NULL);
-  lv_msg_subsribe_obj(MSG_NEW_VOLT, bat_label, (void *)"VOLT : %d mV");
+  lv_msg_subscribe_obj(MSG_NEW_VOLT, bat_label, (void *)"VOLT : %d mV");
 
   // Main BMS info page
   extern lv_obj_t *bms_label;

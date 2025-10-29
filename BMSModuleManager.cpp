@@ -26,20 +26,33 @@ void BMSModuleManager::balanceCells()
     uint8_t payload[4];
     uint8_t buff[30];
     uint8_t balance = 0;//bit 0 - 5 are to activate cell balancing 1-6
-  
+
     for (int address = 1; address <= MAX_MODULE_ADDR; address++)
     {
       if (modules[address].isExisting())
       {
+        float moduleLow = modules[address].getLowCellV();
+        float moduleHigh = modules[address].getHighCellV();
+        if (moduleHigh < BMS_BALANCE_VOLTAGE_MIN) {
+            continue;
+        }
+        if (moduleLow <= 0.0f) {
+            continue;
+        }
+        if ((moduleHigh - moduleLow) < BMS_BALANCE_VOLTAGE_DELTA) {
+            continue;
+        }
+
         balance = 0;
         for (int i = 0; i < 6; i++)
         {
-            if (getLowCellVolt() < modules[address].getCellVoltage(i))
+            float cellVoltage = modules[address].getCellVoltage(i);
+            if (cellVoltage > (moduleLow + BMS_BALANCE_VOLTAGE_DELTA))
             {
-                balance = balance | (1<<i);
+                balance |= static_cast<uint8_t>(1U << i);
             }
         }
-  
+
         if (balance != 0) //only send balance command when needed
         {
             payload[0] = address << 1;
@@ -47,14 +60,20 @@ void BMSModuleManager::balanceCells()
             payload[2] = BMS_BALANCE_TIME_LIMIT_SEC; //60 second balance limit, if not triggered to balance it will stop after 5 seconds
             BMSUtil::sendData(payload, 3, true);
             delay(BMS_COMMAND_DELAY_MS);
-            BMSUtil::getReply(buff, 30);
+            if (BMSUtil::getReply(buff, 30) < 3) {
+                Logger::warn("Module %i balance time write did not acknowledge", address);
+                continue;
+            }
 
             payload[0] = address << 1;
             payload[1] = REG_BAL_CTRL;
             payload[2] = balance; //write balance state to register
             BMSUtil::sendData(payload, 3, true);
             delay(BMS_COMMAND_DELAY_MS);
-            BMSUtil::getReply(buff, 30);
+            if (BMSUtil::getReply(buff, 30) < 3) {
+                Logger::warn("Module %i balance control write did not acknowledge", address);
+                continue;
+            }
 
             if (Logger::isDebug()) //read registers back out to check if everthing is good
             {
@@ -287,6 +306,7 @@ void BMSModuleManager::getAllVoltTemp()
     extern String bms_modules_text;
     bms_modules_text = "";
     packVolt = 0.0f;
+    bool anyData = false;
     float lowCell = 1000.0f;
     float highCell = -1000.0f;
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
@@ -295,7 +315,11 @@ void BMSModuleManager::getAllVoltTemp()
         {
             Logger::debug("");
             Logger::debug("Module %i exists. Reading voltage and temperature values", x);
-            modules[x].readModuleValues();
+            if (!modules[x].readModuleValues())
+            {
+                Logger::warn("Failed to read telemetry from module %i", x);
+                continue;
+            }
             Logger::debug("Module voltage: %f", modules[x].getModuleVoltage());
             float low = modules[x].getLowCellV();
             float high = modules[x].getHighCellV();
@@ -308,16 +332,24 @@ void BMSModuleManager::getAllVoltTemp()
             if (modules[x].getHighTemp() > highestPackTemp) highestPackTemp = modules[x].getHighTemp();            
 
             bms_modules_text += String("Mod #") + (int)x + ": " + modules[x].getModuleVoltage() + "v l: " + low + "v h: " + high + "v d=" + (high - low) + "v\n"; 
+            anyData = true;
         }
     }
 
-    packVolt = packVolt/Pstring;
-    if (packVolt > highestPackVolt) highestPackVolt = packVolt;
-    if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
-    float delta = highCell - lowCell;
+    if (anyData && Pstring > 0)
+    {
+        packVolt = packVolt/Pstring;
+        if (packVolt > highestPackVolt) highestPackVolt = packVolt;
+        if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
+        float delta = highCell - lowCell;
 
-    bms_status = String("SoC: ") + (int)getSoC(packVolt) + " %\n\n";
-    bms_status += String("Volts: ") + packVolt + "v low:" + lowCell + "v high: " + highCell + "v d=" + delta;
+        bms_status = String("SoC: ") + (int)getSoC(packVolt) + " %\n\n";
+        bms_status += String("Volts: ") + packVolt + "v low:" + lowCell + "v high: " + highCell + "v d=" + delta;
+    }
+    else
+    {
+        bms_status = "No valid module telemetry";
+    }
 
     if (digitalRead(PIN_BMS_FAULT) == LOW) {
         if (!isFaulted) Logger::error("One or more BMS modules have entered the fault state!");
