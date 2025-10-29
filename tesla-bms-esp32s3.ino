@@ -9,6 +9,7 @@
 #include "factory_gui.h"
 #include "pin_config.h"
 #include "constants.h"
+#include "config.h"
 #include "sntp.h"
 #include "time.h"
 #include <stdio.h>
@@ -21,9 +22,12 @@ HardwareSerial SERIALBMS(0);
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
 
-#include "BMSModuleManager.h" 
+#include "BMSModuleManager.h"
 #include "Logger.h"
-BMSModuleManager bms; 
+
+// Global instances
+BMSModuleManager bms;
+EEPROMSettings settings; 
 
 namespace {
 struct AppContext {
@@ -262,10 +266,17 @@ static int computeStateOfChargePercent(float packVoltage) {
   if (BMS_NUM_SERIES <= 0) {
     return 0;
   }
-  float perCellVoltage = packVoltage / static_cast<float>(BMS_NUM_SERIES);
-  float normalized = (perCellVoltage - SOC_MIN_CELL_VOLTAGE) * 100.0f / (SOC_MAX_CELL_VOLTAGE - SOC_MIN_CELL_VOLTAGE);
+  // Calculate per-module voltage (pack voltage divided by number of modules in series)
+  float perModuleVoltage = packVoltage / static_cast<float>(BMS_NUM_SERIES);
+
+  // Normalize based on module voltage range (each module is 6S)
+  float normalized = (perModuleVoltage - SOC_MIN_MODULE_VOLTAGE) * 100.0f /
+                     (SOC_MAX_MODULE_VOLTAGE - SOC_MIN_MODULE_VOLTAGE);
+
+  // Clamp to 0-100%
   if (normalized < 0.0f) normalized = 0.0f;
   if (normalized > 100.0f) normalized = 100.0f;
+
   return static_cast<int>(normalized + 0.5f);
 }
 
@@ -306,13 +317,16 @@ static void maintainBalancingState(AppContext &context,
     return;
   }
 
-  if (context.lastBalanceMs > 0 && (nowMs - context.lastBalanceMs) > BALANCE_TIME_MS) {
+  // Check if balancing timeout has elapsed (handles millis() wraparound correctly)
+  if (context.lastBalanceMs > 0 && (nowMs - context.lastBalanceMs) >= BALANCE_TIME_MS) {
     context.isBalancing = false;
   }
 
+  // Check if we should start balancing
   if (telemetry.highestCell > BMS_BALANCE_VOLTAGE_MIN &&
       telemetry.highestCell > (telemetry.lowestCell + BMS_BALANCE_VOLTAGE_DELTA)) {
-    if (context.lastBalanceMs == 0 || nowMs >= (context.lastBalanceMs + BALANCE_TIME_MS)) {
+    // Start balancing if never balanced before, or if enough time has passed (handles wraparound)
+    if (context.lastBalanceMs == 0 || (nowMs - context.lastBalanceMs) >= BALANCE_TIME_MS) {
       bms.balanceCells();
       context.isBalancing = true;
       context.lastBalanceMs = nowMs;
@@ -355,12 +369,17 @@ static void handleGuiUpdates(AppContext &context, uint32_t now) {
   }
 
   if (context.bmsLabel != nullptr && now >= context.nextStatusRefresh) {
-    if (moduleStatusBuffer[0] != '\0') {
-      snprintf(displayBuffer, DISPLAY_BUFFER_SIZE, "%s\n\n%s", packStatusBuffer, moduleStatusBuffer);
+    // Only update display with valid data
+    if (bms.getTelemetry().hasData) {
+      if (moduleStatusBuffer[0] != '\0') {
+        snprintf(displayBuffer, DISPLAY_BUFFER_SIZE, "%s\n\n%s", packStatusBuffer, moduleStatusBuffer);
+      } else {
+        snprintf(displayBuffer, DISPLAY_BUFFER_SIZE, "%s", packStatusBuffer);
+      }
+      lv_label_set_text(context.bmsLabel, displayBuffer);
     } else {
-      snprintf(displayBuffer, DISPLAY_BUFFER_SIZE, "%s", packStatusBuffer);
+      lv_label_set_text(context.bmsLabel, "No valid module data");
     }
-    lv_label_set_text(context.bmsLabel, displayBuffer);
     context.nextStatusRefresh = now + STATUS_UPDATE_INTERVAL_MS;
   }
 }
@@ -464,7 +483,7 @@ void wifi_test(void) {
     text += ".";
     lv_label_set_text(log_label, text.c_str());
     LV_DELAY(100);
-    if (millis() - last_tick > WIFI_CONNECT_WAIT_MAX) { /* Automatically start smartconfig when connection times out */
+    if (millis() - last_tick > WIFI_CONNECT_WAIT_MAX_MS) { /* Automatically start smartconfig when connection times out */
       text += "\nConnection timed out, start smartconfig";
       lv_label_set_text(log_label, text.c_str());
       LV_DELAY(100);

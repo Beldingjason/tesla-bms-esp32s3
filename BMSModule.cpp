@@ -17,8 +17,8 @@ BMSModule::BMSModule()
     moduleVolt = 0.0f;
     temperatures[0] = 0.0f;
     temperatures[1] = 0.0f;
-    lowestTemperature = TEMP_INIT_LOW;
-    highestTemperature = TEMP_INIT_HIGH;
+    lowestTemperature = TEMP_INIT_FOR_MIN_TRACKING;
+    highestTemperature = TEMP_INIT_FOR_MAX_TRACKING;
     lowestModuleVolt = MODULE_VOLTAGE_INIT_HIGH;
     highestModuleVolt = MODULE_VOLTAGE_INIT_LOW;
     exists = false;
@@ -208,14 +208,14 @@ bool BMSModule::readModuleValues()
 
             if (isnan(decodedTemp0)) {
                 Logger::warn("Module %i temperature sensor 0 returned invalid data (raw=%u)", moduleAddress, rawTemp0);
-                temperatures[0] = TEMP_INIT_LOW;
+                temperatures[0] = TEMP_INIT_FOR_MIN_TRACKING;  // Set to high value so it won't affect min tracking
             } else {
                 temperatures[0] = decodedTemp0;
             }
 
             if (isnan(decodedTemp1)) {
                 Logger::warn("Module %i temperature sensor 1 returned invalid data (raw=%u)", moduleAddress, rawTemp1);
-                temperatures[1] = TEMP_INIT_LOW;
+                temperatures[1] = TEMP_INIT_FOR_MIN_TRACKING;  // Set to high value so it won't affect min tracking
             } else {
                 temperatures[1] = decodedTemp1;
             }

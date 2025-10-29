@@ -18,6 +18,16 @@ public:
         float highTemp = 0.0f;
     };
 
+    struct ModuleCommStats {
+        uint32_t successCount = 0;
+        uint32_t failureCount = 0;
+        uint32_t getTotalAttempts() const { return successCount + failureCount; }
+        float getSuccessRate() const {
+            uint32_t total = getTotalAttempts();
+            return total > 0 ? (float)successCount * 100.0f / (float)total : 0.0f;
+        }
+    };
+
     struct PackTelemetry {
         bool hasData = false;
         float packVoltage = 0.0f;
@@ -62,6 +72,9 @@ public:
     float getHighVoltage();
     float getLowVoltage();
     bool isFaulted() const;
+    const ModuleCommStats& getModuleCommStats(int moduleIndex) const;
+    void resetModuleCommStats(int moduleIndex);
+    void resetAllCommStats();
     /*
     void processCANMsg(CAN_FRAME &frame);
     */
@@ -77,6 +90,7 @@ private:
     WatchdogCallback watchdogCallback_;
     int Pstring;
     BMSModule modules[MAX_MODULE_ADDR + 1]; // store data for as many modules as we've configured for.
+    ModuleCommStats commStats_[MAX_MODULE_ADDR + 1]; // Communication statistics per module
     int batteryID;
     int numFoundModules;                    // The number of modules that seem to exist
     bool isFaulted_;

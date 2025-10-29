@@ -5,8 +5,10 @@
 // This is currently set for a 48V system (2 Tesla modules in series)
 #define BMS_NUM_SERIES                2 // Number of modules in series
 #define BMS_NUM_PARALLEL              1 // Number of modules in parallel
-#define BMS_BALANCE_VOLTAGE_MIN       4.0 // Volts
-#define BMS_BALANCE_VOLTAGE_DELTA     0.04 // Volts
+
+// Balance settings are now in constants.h:
+// BMS_BALANCE_VOLTAGE_MIN = 4.0V (minimum voltage to allow balancing)
+// BMS_BALANCE_VOLTAGE_DELTA = 0.050V (50mV delta to trigger balancing)
 
 #include <Arduino.h>
 

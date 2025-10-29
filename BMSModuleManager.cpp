@@ -13,8 +13,8 @@ BMSModuleManager::BMSModuleManager()
       isFaulted_(false),
       lowestPackVoltHistory_(1000.0f),
       highestPackVoltHistory_(0.0f),
-      lowestPackTempHistory_(TEMP_INIT_LOW),
-      highestPackTempHistory_(TEMP_INIT_HIGH)
+      lowestPackTempHistory_(TEMP_INIT_FOR_MIN_TRACKING),
+      highestPackTempHistory_(TEMP_INIT_FOR_MAX_TRACKING)
 {
     telemetry_ = PackTelemetry{};
     telemetry_.lowestPackVolt = lowestPackVoltHistory_;
@@ -318,6 +318,8 @@ bool BMSModuleManager::collectTelemetry()
     float lowCell = 1000.0f;
     float highCell = -1000.0f;
     bool anyData = false;
+    int modulesRead = 0;
+    int modulesFailed = 0;
 
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
@@ -343,14 +345,26 @@ bool BMSModuleManager::collectTelemetry()
                 if (moduleTelemetry.highTemp > highestPackTempHistory_) highestPackTempHistory_ = moduleTelemetry.highTemp;
 
                 anyData = true;
+                modulesRead++;
+                commStats_[x].successCount++;
             }
             else
             {
                 Logger::warn("Failed to read telemetry from module %i", x);
+                modulesFailed++;
+                commStats_[x].failureCount++;
             }
         }
 
         newTelemetry.modules[x] = moduleTelemetry;
+    }
+
+    // Log aggregate statistics
+    if (modulesFailed > 0) {
+        Logger::warn("Telemetry collection: %d modules read successfully, %d modules failed",
+                     modulesRead, modulesFailed);
+    } else if (modulesRead > 0) {
+        Logger::debug("Telemetry collection: %d modules read successfully", modulesRead);
     }
 
     if (anyData && Pstring > 0)
@@ -682,9 +696,34 @@ void BMSModuleManager::printPackDetails()
             SERIALCONSOLE.print("  Neg Term Temp: ");
             SERIALCONSOLE.print(modules[y].getTemperature(0));
             SERIALCONSOLE.print("C  Pos Term Temp: ");
-            SERIALCONSOLE.print(modules[y].getTemperature(1)); 
+            SERIALCONSOLE.print(modules[y].getTemperature(1));
             SERIALCONSOLE.println("C");
-            
+
         }
+    }
+}
+
+const BMSModuleManager::ModuleCommStats& BMSModuleManager::getModuleCommStats(int moduleIndex) const
+{
+    static ModuleCommStats emptyStats;
+    if (moduleIndex < 0 || moduleIndex > MAX_MODULE_ADDR) {
+        return emptyStats;
+    }
+    return commStats_[moduleIndex];
+}
+
+void BMSModuleManager::resetModuleCommStats(int moduleIndex)
+{
+    if (moduleIndex >= 0 && moduleIndex <= MAX_MODULE_ADDR) {
+        commStats_[moduleIndex].successCount = 0;
+        commStats_[moduleIndex].failureCount = 0;
+    }
+}
+
+void BMSModuleManager::resetAllCommStats()
+{
+    for (int i = 0; i <= MAX_MODULE_ADDR; i++) {
+        commStats_[i].successCount = 0;
+        commStats_[i].failureCount = 0;
     }
 }
