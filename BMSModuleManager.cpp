@@ -5,20 +5,26 @@
 #include "pin_config.h"
 #include "constants.h"
 
-extern EEPROMSettings settings;
-extern String bms_status;
-
 BMSModuleManager::BMSModuleManager()
+    : watchdogCallback_(nullptr),
+      Pstring(1),
+      batteryID(0),
+      numFoundModules(0),
+      isFaulted_(false),
+      lowestPackVoltHistory_(1000.0f),
+      highestPackVoltHistory_(0.0f),
+      lowestPackTempHistory_(TEMP_INIT_LOW),
+      highestPackTempHistory_(TEMP_INIT_HIGH)
 {
-    for (int i = 1; i <= MAX_MODULE_ADDR; i++) {
+    telemetry_ = PackTelemetry{};
+    telemetry_.lowestPackVolt = lowestPackVoltHistory_;
+    telemetry_.highestPackVolt = highestPackVoltHistory_;
+    telemetry_.lowestPackTemp = lowestPackTempHistory_;
+    telemetry_.highestPackTemp = highestPackTempHistory_;
+    for (int i = 0; i <= MAX_MODULE_ADDR; i++) {
         modules[i].setExists(false);
         modules[i].setAddress(i);
     }
-    lowestPackVolt = 1000.0f;
-    highestPackVolt = 0.0f;
-    lowestPackTemp = TEMP_INIT_LOW;
-    highestPackTemp = TEMP_INIT_HIGH;
-    isFaulted = false;
 }
 
 void BMSModuleManager::balanceCells()
@@ -29,6 +35,7 @@ void BMSModuleManager::balanceCells()
 
     for (int address = 1; address <= MAX_MODULE_ADDR; address++)
     {
+      applyWatchdogReset();
       if (modules[address].isExisting())
       {
         float moduleLow = modules[address].getLowCellV();
@@ -118,6 +125,7 @@ void BMSModuleManager::setupBoards()
     
     while (1 == 1)
     {
+        applyWatchdogReset();
         payload[0] = 0;
         payload[1] = 0;
         payload[2] = 1;
@@ -130,6 +138,7 @@ void BMSModuleManager::setupBoards()
                 //look for a free address to use
                 for (int y = 1; y < MAX_BMS_MODULES; y++) 
                 {
+                    applyWatchdogReset();
                     if (!modules[y].isExisting())
                     {
                         payload[0] = 0;
@@ -170,6 +179,7 @@ void BMSModuleManager::findBoards()
     payload[2] = 1; //read one byte
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
+        applyWatchdogReset();
         modules[x].setExists(false);
         payload[0] = x << 1;
         BMSUtil::sendData(payload, 3, false);
@@ -199,12 +209,14 @@ void BMSModuleManager::renumberBoardIDs()
 
     for (int y = 1; y < MAX_BMS_MODULES; y++) 
     {
+        applyWatchdogReset();
         modules[y].setExists(false);  
         numFoundModules = 0;
     }    
     
     while (attempts < 3)
     {
+        applyWatchdogReset();
         payload[0] = 0x3F << 1; //broadcast the reset command
         payload[1] = 0x3C;//reset
         payload[2] = 0xA5;//data to cause a reset
@@ -243,7 +255,7 @@ void BMSModuleManager::clearFaults()
     payload[2] = 0x00;//data to clear
     BMSUtil::sendDataWithReply(payload, 3, true, buff, 4);
   
-    isFaulted = false;
+    isFaulted_ = false;
 }
 
 /*
@@ -255,6 +267,7 @@ void BMSModuleManager::sleepBoards()
 {
     uint8_t payload[3];
     uint8_t buff[8];
+    applyWatchdogReset();
     payload[0] = 0x7F; //broadcast
     payload[1] = REG_IO_CTRL;//IO ctrl start
     payload[2] = 0x04;//write sleep bit
@@ -271,6 +284,7 @@ void BMSModuleManager::wakeBoards()
 {
     uint8_t payload[3];
     uint8_t buff[8];
+    applyWatchdogReset();
     payload[0] = 0x7F; //broadcast
     payload[1] = REG_IO_CTRL;//IO ctrl start
     payload[2] = 0x00;//write sleep bit
@@ -291,116 +305,154 @@ void BMSModuleManager::wakeBoards()
     BMSUtil::getReply(buff, 8);
 }
 
-static float getSoC(float v)
+bool BMSModuleManager::collectTelemetry()
 {
-  v /= BMS_NUM_SERIES;
-  v -= SOC_MIN_CELL_VOLTAGE;
-  v *= 100;
-  v /= (SOC_MAX_CELL_VOLTAGE - SOC_MIN_CELL_VOLTAGE);
-  return v;
-}
+    applyWatchdogReset();
+    PackTelemetry newTelemetry;
+    newTelemetry.lowestPackVolt = lowestPackVoltHistory_;
+    newTelemetry.highestPackVolt = highestPackVoltHistory_;
+    newTelemetry.lowestPackTemp = lowestPackTempHistory_;
+    newTelemetry.highestPackTemp = highestPackTempHistory_;
 
-
-void BMSModuleManager::getAllVoltTemp()
-{
-    extern String bms_modules_text;
-    bms_modules_text = "";
-    packVolt = 0.0f;
-    bool anyData = false;
+    float packVoltageSum = 0.0f;
     float lowCell = 1000.0f;
     float highCell = -1000.0f;
+    bool anyData = false;
+
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
-        if (modules[x].isExisting()) 
+        ModuleTelemetry moduleTelemetry;
+        moduleTelemetry.present = modules[x].isExisting();
+
+        if (moduleTelemetry.present)
         {
+            applyWatchdogReset();
             Logger::debug("");
             Logger::debug("Module %i exists. Reading voltage and temperature values", x);
-            if (!modules[x].readModuleValues())
+            moduleTelemetry.telemetryValid = updateModuleTelemetry(x, moduleTelemetry);
+            if (moduleTelemetry.telemetryValid)
+            {
+                Logger::debug("Module voltage: %f", moduleTelemetry.moduleVoltage);
+                Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", moduleTelemetry.lowCell, moduleTelemetry.highCell);
+
+                packVoltageSum += moduleTelemetry.moduleVoltage;
+                if (moduleTelemetry.lowCell < lowCell) lowCell = moduleTelemetry.lowCell;
+                if (moduleTelemetry.highCell > highCell) highCell = moduleTelemetry.highCell;
+
+                if (moduleTelemetry.lowTemp < lowestPackTempHistory_) lowestPackTempHistory_ = moduleTelemetry.lowTemp;
+                if (moduleTelemetry.highTemp > highestPackTempHistory_) highestPackTempHistory_ = moduleTelemetry.highTemp;
+
+                anyData = true;
+            }
+            else
             {
                 Logger::warn("Failed to read telemetry from module %i", x);
-                continue;
             }
-            Logger::debug("Module voltage: %f", modules[x].getModuleVoltage());
-            float low = modules[x].getLowCellV();
-            float high = modules[x].getHighCellV();
-            Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", low, high);
-            if (low < lowCell) lowCell = low;
-            if (high > highCell) highCell = high;
-            Logger::debug("Temp1: %f       Temp2: %f", modules[x].getTemperature(0), modules[x].getTemperature(1));
-            packVolt += modules[x].getModuleVoltage();
-            if (modules[x].getLowTemp() < lowestPackTemp) lowestPackTemp = modules[x].getLowTemp();
-            if (modules[x].getHighTemp() > highestPackTemp) highestPackTemp = modules[x].getHighTemp();            
-
-            bms_modules_text += String("Mod #") + (int)x + ": " + modules[x].getModuleVoltage() + "v l: " + low + "v h: " + high + "v d=" + (high - low) + "v\n"; 
-            anyData = true;
         }
+
+        newTelemetry.modules[x] = moduleTelemetry;
     }
 
     if (anyData && Pstring > 0)
     {
-        packVolt = packVolt/Pstring;
-        if (packVolt > highestPackVolt) highestPackVolt = packVolt;
-        if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
-        float delta = highCell - lowCell;
+        newTelemetry.packVoltage = packVoltageSum / static_cast<float>(Pstring);
+        newTelemetry.lowestCell = lowCell;
+        newTelemetry.highestCell = highCell;
+        newTelemetry.cellDelta = highCell - lowCell;
 
-        bms_status = String("SoC: ") + (int)getSoC(packVolt) + " %\n\n";
-        bms_status += String("Volts: ") + packVolt + "v low:" + lowCell + "v high: " + highCell + "v d=" + delta;
+        if (newTelemetry.packVoltage > highestPackVoltHistory_) highestPackVoltHistory_ = newTelemetry.packVoltage;
+        if (newTelemetry.packVoltage < lowestPackVoltHistory_) lowestPackVoltHistory_ = newTelemetry.packVoltage;
+        newTelemetry.lowestPackVolt = lowestPackVoltHistory_;
+        newTelemetry.highestPackVolt = highestPackVoltHistory_;
+
+        newTelemetry.lowestPackTemp = lowestPackTempHistory_;
+        newTelemetry.highestPackTemp = highestPackTempHistory_;
+        newTelemetry.hasData = true;
     }
     else
     {
-        bms_status = "No valid module telemetry";
+        newTelemetry.hasData = false;
+        newTelemetry.packVoltage = 0.0f;
+        newTelemetry.lowestCell = 0.0f;
+        newTelemetry.highestCell = 0.0f;
+        newTelemetry.cellDelta = 0.0f;
     }
 
-    if (digitalRead(PIN_BMS_FAULT) == LOW) {
-        if (!isFaulted) Logger::error("One or more BMS modules have entered the fault state!");
-        isFaulted = true;
+    newTelemetry.faultPinActive = (digitalRead(PIN_BMS_FAULT) == LOW);
+    if (newTelemetry.faultPinActive && !isFaulted_) {
+        Logger::error("One or more BMS modules have entered the fault state!");
+    } else if (!newTelemetry.faultPinActive && isFaulted_) {
+        Logger::info("All modules have exited a faulted state");
     }
-    else
+    isFaulted_ = newTelemetry.faultPinActive;
+
+    telemetry_ = newTelemetry;
+    return telemetry_.hasData;
+}
+
+const BMSModuleManager::PackTelemetry &BMSModuleManager::getTelemetry() const
+{
+    return telemetry_;
+}
+
+void BMSModuleManager::setWatchdogCallback(WatchdogCallback callback)
+{
+    watchdogCallback_ = callback;
+}
+
+bool BMSModuleManager::updateModuleTelemetry(int moduleIndex, ModuleTelemetry &outTelemetry)
+{
+    if (!modules[moduleIndex].readModuleValues())
     {
-        if (isFaulted) Logger::info("All modules have exited a faulted state");
-        isFaulted = false;
+        outTelemetry.telemetryValid = false;
+        return false;
+    }
+
+    outTelemetry.telemetryValid = true;
+    outTelemetry.moduleVoltage = modules[moduleIndex].getModuleVoltage();
+    outTelemetry.lowCell = modules[moduleIndex].getLowCellV();
+    outTelemetry.highCell = modules[moduleIndex].getHighCellV();
+    outTelemetry.cellDelta = outTelemetry.highCell - outTelemetry.lowCell;
+    outTelemetry.lowTemp = modules[moduleIndex].getLowTemp();
+    outTelemetry.highTemp = modules[moduleIndex].getHighTemp();
+    return true;
+}
+
+void BMSModuleManager::applyWatchdogReset() const
+{
+    if (watchdogCallback_) {
+        watchdogCallback_();
     }
 }
 
 float BMSModuleManager::getLowCellVolt()
 {
-  LowCellVolt = 5.0;
-    for (int x = 1; x <= MAX_MODULE_ADDR; x++)
-    {
-        if (modules[x].isExisting()) 
-        {
-           if (modules[x].getLowCellV() <  LowCellVolt)  LowCellVolt = modules[x].getLowCellV(); 
-        }
-    }
-    return LowCellVolt;
+    return telemetry_.hasData ? telemetry_.lowestCell : 0.0f;
 }
 
 float BMSModuleManager::getHighCellVolt()
 {
-  HighCellVolt = 0.0;
-    for (int x = 1; x <= MAX_MODULE_ADDR; x++)
-    {
-        if (modules[x].isExisting())
-        {
-           if (modules[x].getHighCellV() >  HighCellVolt)  HighCellVolt = modules[x].getHighCellV();
-        }
-    }
-    return HighCellVolt;
+    return telemetry_.hasData ? telemetry_.highestCell : 0.0f;
 }
 
 float BMSModuleManager::getPackVoltage()
 {
-    return packVolt;
+    return telemetry_.packVoltage;
 }
 
 float BMSModuleManager::getLowVoltage()
 {
-    return lowestPackVolt;
+    return telemetry_.lowestPackVolt;
 }
 
 float BMSModuleManager::getHighVoltage()
 {
-    return highestPackVolt;
+    return telemetry_.highestPackVolt;
+}
+
+bool BMSModuleManager::isFaulted() const
+{
+    return isFaulted_;
 }
 
 void BMSModuleManager::setBatteryID(int id)
@@ -476,7 +528,7 @@ void BMSModuleManager::printPackSummary()
     Logger::console("");
     Logger::console("");
     Logger::console("                                     Pack Status:");
-    if (isFaulted) Logger::console("                                       FAULTED!");
+    if (isFaulted_) Logger::console("                                       FAULTED!");
     else Logger::console("                                   All systems go!");
     Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV     Avg Temp: %fC ", numFoundModules, 
                     getPackVoltage(),getAvgCellVolt(), getAvgTemperature());
@@ -593,10 +645,15 @@ void BMSModuleManager::printPackDetails()
     Logger::console("");
     Logger::console("");
     Logger::console("                                         Pack Status:");
-    if (isFaulted) Logger::console("                                           FAULTED!");
+    if (isFaulted_) Logger::console("                                           FAULTED!");
     else Logger::console("                                      All systems go!");
-    Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV  Low Cell Voltage: %fV   High Cell Voltage: %fV   Avg Temp: %fC ", numFoundModules, 
-                    getPackVoltage(),getAvgCellVolt(),LowCellVolt, HighCellVolt, getAvgTemperature());
+    Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV  Low Cell Voltage: %fV   High Cell Voltage: %fV   Avg Temp: %fC ",
+                    numFoundModules,
+                    getPackVoltage(),
+                    getAvgCellVolt(),
+                    getLowCellVolt(),
+                    getHighCellVolt(),
+                    getAvgTemperature());
     Logger::console("");
     for (int y = 1; y < MAX_BMS_MODULES; y++)
     {

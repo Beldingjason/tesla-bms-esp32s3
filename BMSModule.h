@@ -7,7 +7,7 @@ class BMSModule
 {
   public:
     BMSModule();
-    void readStatus();
+    bool readStatus();
     bool readModuleValues();
     float getCellVoltage(int cell);
     float getLowCellV();

@@ -11,6 +11,7 @@
 #include "constants.h"
 #include "sntp.h"
 #include "time.h"
+#include <stdio.h>
 
 #include "driver/gpio.h"
 #include "esp_task_wdt.h"
@@ -23,20 +24,56 @@ HardwareSerial SERIALBMS(0);
 #include "BMSModuleManager.h" 
 #include "Logger.h"
 BMSModuleManager bms; 
-String bms_status, bms_modules_text;
-lv_obj_t *bms_label;
+
+namespace {
+struct AppContext {
+  lv_obj_t *bmsLabel = nullptr;
+  uint32_t nextTelemetryPoll = 0;
+  uint32_t nextGuiUpdate = 0;
+  uint32_t nextPageSwitch = 0;
+  uint32_t nextStatusRefresh = 0;
+  bool isBalancing = false;
+  uint32_t lastBalanceMs = 0;
+};
+
+constexpr size_t PACK_STATUS_BUFFER_SIZE = 192;
+constexpr size_t MODULE_STATUS_BUFFER_SIZE = 2048;
+constexpr size_t DISPLAY_BUFFER_SIZE = PACK_STATUS_BUFFER_SIZE + MODULE_STATUS_BUFFER_SIZE;
+
+AppContext appContext;
+char packStatusBuffer[PACK_STATUS_BUFFER_SIZE];
+char moduleStatusBuffer[MODULE_STATUS_BUFFER_SIZE];
+char displayBuffer[DISPLAY_BUFFER_SIZE];
+} // namespace
+
+lv_obj_t *bms_label = nullptr;
 
 esp_lcd_panel_io_handle_t io_handle = NULL;
 static lv_disp_draw_buf_t disp_buf; // contains internal graphic buffer(s) called draw buffer(s)
 static lv_disp_drv_t disp_drv;      // contains callback functions
 static lv_color_t *lv_disp_buf;
 static bool is_initialized_lvgl = false;
-static uint32_t last_tick2 = 0;
 
 void wifi_test(void);
 void timeavailable(struct timeval *t);
 void printLocalTime();
 void SmartConfig();
+
+static void configurePowerRails();
+static void configureWatchdog();
+static void configureSerialConsole();
+static void configureTimeServices();
+static esp_lcd_panel_handle_t initializeDisplayHardware();
+static void initializeLvgl(esp_lcd_panel_handle_t panel_handle);
+static void initializeUserInterface(AppContext &context);
+static void configureBmsSubsystem();
+static void waitForBmsInitialization();
+static void handleTelemetry(AppContext &context, uint32_t now);
+static void handleGuiUpdates(AppContext &context, uint32_t now);
+static void formatStatusBuffers(const BMSModuleManager::PackTelemetry &telemetry, bool isBalancing);
+static int computeStateOfChargePercent(float packVoltage);
+static void maintainBalancingState(AppContext &context, const BMSModuleManager::PackTelemetry &telemetry, uint32_t nowMs);
+static void appendModuleSummaryLine(char *buffer, size_t bufferSize, size_t &offset, int index, const BMSModuleManager::ModuleTelemetry &module);
 
 static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx) {
   if (is_initialized_lvgl) {
@@ -56,23 +93,29 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
   esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
 }
 
-void setup() {
+static void configurePowerRails() {
   pinMode(PIN_POWER_ON, OUTPUT);
   digitalWrite(PIN_POWER_ON, HIGH);
+  pinMode(PIN_BMS_FAULT, INPUT_PULLUP);
+}
 
-  // Initialize watchdog timer
+static void configureWatchdog() {
   esp_task_wdt_init(WDT_TIMEOUT, true);
   esp_task_wdt_add(NULL); // Add current thread to WDT watch
+}
+
+static void configureSerialConsole() {
   Serial.begin(115200);
+}
 
-#if USE_WIFI
-  sntp_servermode_dhcp(1); // (optional)
-#endif
-
+static void configureTimeServices() {
   configTime(GMT_OFFSET_SEC, DAY_LIGHT_OFFSET_SEC, NTP_SERVER1, NTP_SERVER2);
+}
 
+static esp_lcd_panel_handle_t initializeDisplayHardware() {
   pinMode(PIN_LCD_RD, OUTPUT);
   digitalWrite(PIN_LCD_RD, HIGH);
+
   esp_lcd_i80_bus_handle_t i80_bus = NULL;
   esp_lcd_i80_bus_config_t bus_config = {
       .dc_gpio_num = PIN_LCD_DC,
@@ -92,7 +135,7 @@ void setup() {
       .bus_width = 8,
       .max_transfer_bytes = LVGL_LCD_BUF_SIZE * sizeof(uint16_t),
   };
-  esp_lcd_new_i80_bus(&bus_config, &i80_bus);
+  ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_config, &i80_bus));
 
   esp_lcd_panel_io_i80_config_t io_config = {
       .cs_gpio_num = PIN_LCD_CS,
@@ -111,24 +154,25 @@ void setup() {
           },
   };
   ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &io_config, &io_handle));
+
   esp_lcd_panel_handle_t panel_handle = NULL;
   esp_lcd_panel_dev_config_t panel_config = {
       .reset_gpio_num = PIN_LCD_RES,
       .color_space = ESP_LCD_COLOR_SPACE_RGB,
       .bits_per_pixel = 16,
   };
-  esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle);
+  ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
   esp_lcd_panel_reset(panel_handle);
   esp_lcd_panel_init(panel_handle);
   esp_lcd_panel_invert_color(panel_handle, true);
-
   esp_lcd_panel_swap_xy(panel_handle, true);
   esp_lcd_panel_mirror(panel_handle, false, true);
-  // the gap is LCD panel specific, even panels with the same driver IC, can
-  // have different gap value
   esp_lcd_panel_set_gap(panel_handle, 0, LCD_PANEL_GAP_OFFSET);
 
-  /* Lighten the screen with gradient */
+  return panel_handle;
+}
+
+static void initializeLvgl(esp_lcd_panel_handle_t panel_handle) {
   ledcSetup(LCD_BACKLIGHT_PWM_CHANNEL, LCD_BACKLIGHT_PWM_FREQ, LCD_BACKLIGHT_PWM_RESOLUTION);
   ledcAttachPin(PIN_LCD_BL, LCD_BACKLIGHT_PWM_CHANNEL);
   for (uint8_t i = 0; i < LCD_BACKLIGHT_MAX_BRIGHTNESS; i++) {
@@ -140,13 +184,13 @@ void setup() {
   lv_disp_buf = (lv_color_t *)heap_caps_malloc(LVGL_LCD_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
   if (lv_disp_buf == NULL) {
     SERIALCONSOLE.println("ERROR: Failed to allocate LVGL display buffer!");
-    while(1) { delay(1000); } // Halt execution
+    while (1) {
+      delay(1000);
+    }
   }
 
   lv_disp_draw_buf_init(&disp_buf, lv_disp_buf, NULL, LVGL_LCD_BUF_SIZE);
-  /*Initialize the display*/
   lv_disp_drv_init(&disp_drv);
-  /*Change the following line to your display resolution*/
   disp_drv.hor_res = EXAMPLE_LCD_H_RES;
   disp_drv.ver_res = EXAMPLE_LCD_V_RES;
   disp_drv.flush_cb = example_lvgl_flush_cb;
@@ -155,71 +199,144 @@ void setup() {
   lv_disp_drv_register(&disp_drv);
 
   is_initialized_lvgl = true;
-
-  SERIALBMS.begin(612500, SERIAL_8N1, /* rx */ GPIO_NUM_2, /* tx */ GPIO_NUM_1);
-
-#if USE_WIFI
-  wifi_test();
-#else
-  ui_begin();
-
-  // Wait for BMS to initialize (reset watchdog during long delay)
-  for (int i = 0; i < STARTUP_DELAY_MS / 1000; i++) {
-    delay(1000);
-    esp_task_wdt_reset();
-  }
-#endif
-
-  bms.renumberBoardIDs();
-
-  Logger::setLoglevel(Logger::Off); //Debug = 0, Info = 1, Warn = 2, Error = 3, Off = 4
-
-  //bms.clearFaults();
-  bms.findBoards();
-  bms.setPstrings(BMS_NUM_PARALLEL);
-  //bms.setSensors(settings.IgnoreTemp, settings.IgnoreVolt); 
-
-  last_tick2 = millis() + PAGE_SWITCH_INTERVAL_MS;
 }
 
-void loop() {
-  lv_timer_handler();
-  esp_task_wdt_reset(); // Reset watchdog timer
+static void initializeUserInterface(AppContext &context) {
+  ui_begin();
+  context.bmsLabel = bms_label;
+}
 
-  // process BMS data
-  static uint32_t looptime = 0;
-  if (millis() - looptime > LOOP_INTERVAL_MS)
-  {
-    looptime = millis();
-    bms.getAllVoltTemp();
+static void configureBmsSubsystem() {
+  bms.setWatchdogCallback(&esp_task_wdt_reset);
+  bms.renumberBoardIDs();
+  Logger::setLoglevel(Logger::Off); // Debug = 0, Info = 1, Warn = 2, Error = 3, Off = 4
+  bms.findBoards();
+  bms.setPstrings(BMS_NUM_PARALLEL);
+}
 
-    // check if balancing is needed
-    // 5mns between balance events.
-    static int is_balancing = 0;
-    static uint32_t last_balance_ms = 0;
-    if (last_balance_ms > 0 && ((millis() - last_balance_ms) > BALANCE_TIME_MS))
-    {
-      is_balancing = 0;
-    }
-    if (bms.getHighCellVolt() > BMS_BALANCE_VOLTAGE_MIN && bms.getHighCellVolt() > (bms.getLowCellVolt() + BMS_BALANCE_VOLTAGE_DELTA))
-    {
-      // Packs need to be balanced
-      if (!last_balance_ms || (millis() >= (last_balance_ms + BALANCE_TIME_MS)))
-      {
-        bms.balanceCells();
-        is_balancing = 1;
-        last_balance_ms = millis();
-      }
-    }
-    if (is_balancing)
-    {
-      bms_status += "\n\n*** BALANCING ***";
-    }
+static void waitForBmsInitialization() {
+  uint32_t elapsed = 0;
+  while (elapsed < STARTUP_DELAY_MS) {
+    delay(1000);
+    esp_task_wdt_reset();
+    elapsed += 1000;
+  }
+}
+
+static void appendModuleSummaryLine(char *buffer,
+                                    size_t bufferSize,
+                                    size_t &offset,
+                                    int index,
+                                    const BMSModuleManager::ModuleTelemetry &module) {
+  if (!module.present || offset >= bufferSize) {
+    return;
   }
 
-  static uint32_t last_tick = 0;
-  if ((millis() - last_tick) > GUI_UPDATE_INTERVAL_MS)
-  {
+  int written;
+  if (!module.telemetryValid) {
+    written = snprintf(buffer + offset, bufferSize - offset, "Mod #%d: read error\n", index);
+  } else {
+    written = snprintf(buffer + offset,
+                       bufferSize - offset,
+                       "Mod #%d: %.2fv l: %.3fv h: %.3fv d=%.3fv\n",
+                       index,
+                       module.moduleVoltage,
+                       module.lowCell,
+                       module.highCell,
+                       module.cellDelta);
+  }
+
+  if (written < 0) {
+    return;
+  }
+
+  if (static_cast<size_t>(written) >= bufferSize - offset) {
+    offset = bufferSize - 1;
+    buffer[offset] = '\0';
+  } else {
+    offset += static_cast<size_t>(written);
+  }
+}
+
+static int computeStateOfChargePercent(float packVoltage) {
+  if (BMS_NUM_SERIES <= 0) {
+    return 0;
+  }
+  float perCellVoltage = packVoltage / static_cast<float>(BMS_NUM_SERIES);
+  float normalized = (perCellVoltage - SOC_MIN_CELL_VOLTAGE) * 100.0f / (SOC_MAX_CELL_VOLTAGE - SOC_MIN_CELL_VOLTAGE);
+  if (normalized < 0.0f) normalized = 0.0f;
+  if (normalized > 100.0f) normalized = 100.0f;
+  return static_cast<int>(normalized + 0.5f);
+}
+
+static void formatStatusBuffers(const BMSModuleManager::PackTelemetry &telemetry, bool isBalancing) {
+  if (!telemetry.hasData) {
+    snprintf(packStatusBuffer, PACK_STATUS_BUFFER_SIZE, "No valid module telemetry");
+    moduleStatusBuffer[0] = '\0';
+    return;
+  }
+
+  const int socPercent = computeStateOfChargePercent(telemetry.packVoltage);
+  const char *balancingLine = isBalancing ? "\n\n*** BALANCING ***" : "";
+  const char *faultLine = telemetry.faultPinActive ? "\n\nFAULT line active" : "";
+
+  snprintf(packStatusBuffer,
+           PACK_STATUS_BUFFER_SIZE,
+           "SoC: %d %%\n\nVolts: %.2fv low: %.3fv high: %.3fv d=%.3fv%s%s",
+           socPercent,
+           telemetry.packVoltage,
+           telemetry.lowestCell,
+           telemetry.highestCell,
+           telemetry.cellDelta,
+           balancingLine,
+           faultLine);
+
+  moduleStatusBuffer[0] = '\0';
+  size_t offset = 0;
+  for (int i = 1; i <= MAX_MODULE_ADDR && offset < MODULE_STATUS_BUFFER_SIZE - 1; i++) {
+    appendModuleSummaryLine(moduleStatusBuffer, MODULE_STATUS_BUFFER_SIZE, offset, i, telemetry.modules[i]);
+  }
+}
+
+static void maintainBalancingState(AppContext &context,
+                                   const BMSModuleManager::PackTelemetry &telemetry,
+                                   uint32_t nowMs) {
+  if (!telemetry.hasData) {
+    context.isBalancing = false;
+    return;
+  }
+
+  if (context.lastBalanceMs > 0 && (nowMs - context.lastBalanceMs) > BALANCE_TIME_MS) {
+    context.isBalancing = false;
+  }
+
+  if (telemetry.highestCell > BMS_BALANCE_VOLTAGE_MIN &&
+      telemetry.highestCell > (telemetry.lowestCell + BMS_BALANCE_VOLTAGE_DELTA)) {
+    if (context.lastBalanceMs == 0 || nowMs >= (context.lastBalanceMs + BALANCE_TIME_MS)) {
+      bms.balanceCells();
+      context.isBalancing = true;
+      context.lastBalanceMs = nowMs;
+    }
+  }
+}
+
+static void handleTelemetry(AppContext &context, uint32_t now) {
+  if (now < context.nextTelemetryPoll) {
+    return;
+  }
+  context.nextTelemetryPoll = now + LOOP_INTERVAL_MS;
+
+  bms.collectTelemetry();
+  const auto &telemetry = bms.getTelemetry();
+  maintainBalancingState(context, telemetry, now);
+  formatStatusBuffers(telemetry, context.isBalancing);
+
+  // Trigger immediate status update
+  context.nextStatusRefresh = now;
+}
+
+static void handleGuiUpdates(AppContext &context, uint32_t now) {
+  if (now >= context.nextGuiUpdate) {
 #if USE_WIFI
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
@@ -229,22 +346,72 @@ void loop() {
 #endif
     uint32_t volt = (analogRead(PIN_BAT_VOLT) * BAT_VOLTAGE_DIVIDER_RATIO * ADC_REFERENCE_VOLTAGE * 1000) / ADC_RESOLUTION;
     lv_msg_send(MSG_NEW_VOLT, &volt);
-
-    last_tick = millis();
+    context.nextGuiUpdate = now + GUI_UPDATE_INTERVAL_MS;
   }
 
-  if ((millis() - last_tick2) > PAGE_SWITCH_INTERVAL_MS)
-  {
+  if (now >= context.nextPageSwitch) {
     ui_switch_page();
-    last_tick2 = millis();
+    context.nextPageSwitch = now + PAGE_SWITCH_INTERVAL_MS;
   }
 
-  static uint32_t last_tick3 = 0;
-  if ((millis() - last_tick3) > STATUS_UPDATE_INTERVAL_MS)
-  {
-    lv_label_set_text(bms_label, (bms_status + "\n\n" + bms_modules_text).c_str());
-    last_tick3 = millis();
+  if (context.bmsLabel != nullptr && now >= context.nextStatusRefresh) {
+    if (moduleStatusBuffer[0] != '\0') {
+      snprintf(displayBuffer, DISPLAY_BUFFER_SIZE, "%s\n\n%s", packStatusBuffer, moduleStatusBuffer);
+    } else {
+      snprintf(displayBuffer, DISPLAY_BUFFER_SIZE, "%s", packStatusBuffer);
+    }
+    lv_label_set_text(context.bmsLabel, displayBuffer);
+    context.nextStatusRefresh = now + STATUS_UPDATE_INTERVAL_MS;
   }
+}
+
+void setup() {
+  configurePowerRails();
+  configureWatchdog();
+  configureSerialConsole();
+
+#if USE_WIFI
+  sntp_servermode_dhcp(1);
+#endif
+
+  configureTimeServices();
+
+  esp_lcd_panel_handle_t panel_handle = initializeDisplayHardware();
+  initializeLvgl(panel_handle);
+
+  SERIALBMS.begin(612500, SERIAL_8N1, /* rx */ GPIO_NUM_2, /* tx */ GPIO_NUM_1);
+
+#if USE_WIFI
+  wifi_test();
+#else
+  initializeUserInterface(appContext);
+  waitForBmsInitialization();
+#endif
+
+  if (bms_label == nullptr) {
+    initializeUserInterface(appContext);
+  } else {
+    appContext.bmsLabel = bms_label;
+  }
+
+  configureBmsSubsystem();
+
+  const uint32_t now = millis();
+  appContext.nextTelemetryPoll = now;
+  appContext.nextGuiUpdate = now;
+  appContext.nextPageSwitch = now + PAGE_SWITCH_INTERVAL_MS;
+  appContext.nextStatusRefresh = now;
+  snprintf(packStatusBuffer, PACK_STATUS_BUFFER_SIZE, "Initializing BMS...");
+  moduleStatusBuffer[0] = '\0';
+}
+
+void loop() {
+  lv_timer_handler();
+  esp_task_wdt_reset();
+
+  const uint32_t now = millis();
+  handleTelemetry(appContext, now);
+  handleGuiUpdates(appContext, now);
 }
 
 #if USE_WIFI
@@ -287,7 +454,7 @@ void wifi_test(void) {
   text += WIFI_SSID;
   text += "\n";
   Serial.print(WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORLD);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   uint32_t last_tick = millis();
   uint32_t i = 0;
   bool is_smartconfig_connect = false;

@@ -3,6 +3,7 @@
 #include "BMSUtil.h"
 #include "Logger.h"
 #include "constants.h"
+#include <math.h>
 
 
 BMSModule::BMSModule()
@@ -33,18 +34,46 @@ BMSModule::BMSModule()
 /*
 Reading the status of the board to identify any flags, will be more useful when implementing a sleep cycle
 */
-void BMSModule::readStatus()
+bool BMSModule::readStatus()
 {
   uint8_t payload[3];
   uint8_t buff[8];
-  payload[0] = moduleAddress << 1; //adresss
-  payload[1] = REG_ALERT_STATUS;//Alert Status start
+  payload[0] = moduleAddress << 1; // address
+  payload[1] = REG_ALERT_STATUS;   // Alert Status start
   payload[2] = 0x04;
-  BMSUtil::sendDataWithReply(payload, 3, false, buff, 7);
+
+  int retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, sizeof(buff));
+  if (retLen < 8) {
+    Logger::warn("Module %i status read length %i (expected >=8)", moduleAddress, retLen);
+    alerts = faults = COVFaults = CUVFaults = 0;
+    return false;
+  }
+
+  const uint8_t receivedCRC = buff[retLen - 1];
+  const uint8_t calculatedCRC = BMSUtil::genCRC(buff, retLen - 1);
+  if (receivedCRC != calculatedCRC) {
+    Logger::warn("Module %i status CRC mismatch (%x != %x)", moduleAddress, receivedCRC, calculatedCRC);
+    alerts = faults = COVFaults = CUVFaults = 0;
+    return false;
+  }
+
+  if (buff[0] != (moduleAddress << 1) || buff[1] != REG_ALERT_STATUS) {
+    Logger::warn("Module %i status header unexpected (addr=%x cmd=%x)", moduleAddress, buff[0], buff[1]);
+    alerts = faults = COVFaults = CUVFaults = 0;
+    return false;
+  }
+
+  if (buff[2] < 4) {
+    Logger::warn("Module %i status payload too short (%u)", moduleAddress, buff[2]);
+    alerts = faults = COVFaults = CUVFaults = 0;
+    return false;
+  }
+
   alerts = buff[3];
   faults = buff[4];
   COVFaults = buff[5];
   CUVFaults = buff[6];
+  return true;
 }
 
 uint8_t BMSModule::getFaults()
@@ -100,7 +129,10 @@ bool BMSModule::readModuleValues()
     
     payload[0] = moduleAddress << 1;
     
-    readStatus();
+    bool statusOk = readStatus();
+    if (!statusOk) {
+        Logger::warn("Module %i status read failed", moduleAddress);
+    }
     Logger::debug("Module %i   alerts=%X   faults=%X   COV=%X   CUV=%X", moduleAddress, alerts, faults, COVFaults, CUVFaults);
     
     payload[1] = REG_ADC_CTRL;
@@ -144,20 +176,52 @@ bool BMSModule::readModuleValues()
                 if (highestCellVolt[i] < cellVolt[i]) highestCellVolt[i] = cellVolt[i];
             }
             
-            //Now using steinhart/hart equation for temperatures. We'll see if it is better than old code.
-            tempTemp = (1.78f / ((buff[17] * 256 + buff[18] + 2) / 33046.0f) - 3.57f);
-            tempTemp *= 1000.0f;
-            tempCalc =  1.0f / (0.0007610373573f + (0.0002728524832 * logf(tempTemp)) + (powf(logf(tempTemp), 3) * 0.0000001022822735f));
+            auto decodeTemperature = [](uint16_t raw, uint16_t adjustment, float scale) -> float {
+                float denominator = (static_cast<float>(raw) + static_cast<float>(adjustment)) / scale;
+                if (denominator <= 0.0f) {
+                    return NAN;
+                }
+                float tempTempLocal = (1.78f / denominator) - 3.57f;
+                if (tempTempLocal <= 0.0f) {
+                    return NAN;
+                }
+                tempTempLocal *= 1000.0f;
+                float lnValue = logf(tempTempLocal);
+                float denominatorSteinhart = 0.0007610373573f +
+                                             (0.0002728524832f * lnValue) +
+                                             (powf(lnValue, 3) * 0.0000001022822735f);
+                if (denominatorSteinhart == 0.0f) {
+                    return NAN;
+                }
+                float tempCalcLocal = 1.0f / denominatorSteinhart;
+                float celsius = tempCalcLocal - TEMP_KELVIN_OFFSET;
+                if (!isfinite(celsius)) {
+                    return NAN;
+                }
+                return celsius;
+            };
 
-            temperatures[0] = tempCalc - TEMP_KELVIN_OFFSET;
+            const uint16_t rawTemp0 = static_cast<uint16_t>(buff[17] * 256 + buff[18]);
+            const uint16_t rawTemp1 = static_cast<uint16_t>(buff[19] * 256 + buff[20]);
+            float decodedTemp0 = decodeTemperature(rawTemp0, 2, 33046.0f);
+            float decodedTemp1 = decodeTemperature(rawTemp1, 9, 33068.0f);
 
-            tempTemp = 1.78f / ((buff[19] * 256 + buff[20] + 9) / 33068.0f) - 3.57f;
-            tempTemp *= 1000.0f;
-            tempCalc = 1.0f / (0.0007610373573f + (0.0002728524832 * logf(tempTemp)) + (powf(logf(tempTemp), 3) * 0.0000001022822735f));
-            temperatures[1] = tempCalc - TEMP_KELVIN_OFFSET;
-            
-            if (getLowTemp() < lowestTemperature) lowestTemperature = getLowTemp();
-            if (getHighTemp() > highestTemperature) highestTemperature = getHighTemp();
+            if (isnan(decodedTemp0)) {
+                Logger::warn("Module %i temperature sensor 0 returned invalid data (raw=%u)", moduleAddress, rawTemp0);
+                temperatures[0] = TEMP_INIT_LOW;
+            } else {
+                temperatures[0] = decodedTemp0;
+            }
+
+            if (isnan(decodedTemp1)) {
+                Logger::warn("Module %i temperature sensor 1 returned invalid data (raw=%u)", moduleAddress, rawTemp1);
+                temperatures[1] = TEMP_INIT_LOW;
+            } else {
+                temperatures[1] = decodedTemp1;
+            }
+
+            if (isfinite(getLowTemp()) && getLowTemp() < lowestTemperature) lowestTemperature = getLowTemp();
+            if (isfinite(getHighTemp()) && getHighTemp() > highestTemperature) highestTemperature = getHighTemp();
 
             Logger::debug("Got voltage and temperature readings");
             retVal = true;

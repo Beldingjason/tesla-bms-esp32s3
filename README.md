@@ -513,7 +513,7 @@ tesla-bms-esp32s3/
 - `setup()` - Initialize hardware, LCD, BMS, and watchdog
 - `loop()` - Main processing loop (500ms BMS update cycle)
 - `balanceCells()` - Activate cell balancing on high modules
-- `getAllVoltTemp()` - Read all module data and update display
+- `collectTelemetry()` - Read module telemetry and refresh cached pack data
 - `ui_*()` - LVGL display update functions
 
 ### Adding Features
@@ -682,4 +682,3 @@ Thank you to:
 - Author(s) not responsible for any damage, injury, or loss
 
 **USE AT YOUR OWN RISK**
-
