@@ -31,7 +31,7 @@ BMSModuleManager::BMSModuleManager()
 void BMSModuleManager::balanceCells()
 {
     uint8_t payload[4];
-    uint8_t buff[30];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_GENERAL];
     uint8_t balance = 0;//bit 0 - 5 are to activate cell balancing 1-6
     int modulesBalanced = 0;
     int modulesSkippedLowVoltage = 0;
@@ -55,6 +55,9 @@ void BMSModuleManager::balanceCells()
         }
         if ((moduleHigh - moduleLow) < BMS_BALANCE_VOLTAGE_DELTA) {
             modulesSkippedAlreadyBalanced++;
+            // Clear balancing status for this module
+            telemetry_.modules[address].isBalancing = false;
+            telemetry_.modules[address].balancingCellMask = 0;
             continue;
         }
 
@@ -75,7 +78,7 @@ void BMSModuleManager::balanceCells()
             payload[2] = BMS_BALANCE_TIME_LIMIT_SEC; //60 second balance limit, if not triggered to balance it will stop after 5 seconds
             BMSUtil::sendData(payload, 3, true);
             delay(BMS_COMMAND_DELAY_MS);
-            if (BMSUtil::getReply(buff, 30) < 3) {
+            if (BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_GENERAL) < 3) {
                 Logger::warn("Module %i balance time write did not acknowledge", address);
                 continue;
             }
@@ -85,13 +88,18 @@ void BMSModuleManager::balanceCells()
             payload[2] = balance; //write balance state to register
             BMSUtil::sendData(payload, 3, true);
             delay(BMS_COMMAND_DELAY_MS);
-            if (BMSUtil::getReply(buff, 30) < 3) {
+            if (BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_GENERAL) < 3) {
                 Logger::warn("Module %i balance control write did not acknowledge", address);
                 continue;
             }
 
             modulesBalanced++;
             Logger::debug("Module %i balancing cells (mask: 0x%02X)", address, balance);
+
+            // Update telemetry with balancing status
+            telemetry_.modules[address].isBalancing = true;
+            telemetry_.modules[address].balancingCellMask = balance;
+            telemetry_.modules[address].lastBalanceTimeMs = millis();
 
             if (Logger::isDebug()) //read registers back out to check if everthing is good
             {
@@ -101,14 +109,14 @@ void BMSModuleManager::balanceCells()
                 payload[2] = 1; //
                 BMSUtil::sendData(payload, 3, false);
                 delay(BMS_COMMAND_DELAY_MS);
-                BMSUtil::getReply(buff, 30);
+                BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_GENERAL);
 
                 payload[0] = address << 1;
                 payload[1] = REG_BAL_CTRL;
                 payload[2] = 1; //
                 BMSUtil::sendData(payload, 3, false);
                 delay(BMS_COMMAND_DELAY_MS);
-                BMSUtil::getReply(buff, 30);
+                BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_GENERAL);
             }
         }
       }
@@ -133,7 +141,7 @@ void BMSModuleManager::balanceCells()
 void BMSModuleManager::setupBoards()
 {
     uint8_t payload[3];
-    uint8_t buff[10];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_SMALL];
     int retLen;
     const int MAX_SETUP_ITERATIONS = 100;
     int iteration = 0;
@@ -165,8 +173,8 @@ void BMSModuleManager::setupBoards()
                         payload[1] = REG_ADDR_CTRL;
                         payload[2] = y | 0x80;
                         BMSUtil::sendData(payload, 3, true);
-                        delay(3);
-                        if (BMSUtil::getReply(buff, 10) > 2)
+                        delay(BMS_SETUP_DELAY_MS);
+                        if (BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_SMALL) > 2)
                         {
                             if (buff[0] == (0x81) && buff[1] == REG_ADDR_CTRL && buff[2] == (y + 0x80))
                             {
@@ -195,7 +203,7 @@ void BMSModuleManager::setupBoards()
 void BMSModuleManager::findBoards()
 {
     uint8_t payload[3];
-    uint8_t buff[8];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_SMALL];
 
     numFoundModules = 0;
     payload[0] = 0;
@@ -228,7 +236,7 @@ void BMSModuleManager::findBoards()
 void BMSModuleManager::renumberBoardIDs()
 {
     uint8_t payload[3];
-    uint8_t buff[8];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_SMALL];
     int attempts = 1;
 
     for (int y = 1; y < MAX_BMS_MODULES; y++) 
@@ -260,7 +268,7 @@ After a RESET boards have their faults written due to the hard restart or first 
 void BMSModuleManager::clearFaults()
 {
     uint8_t payload[3];
-    uint8_t buff[8];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_SMALL];
     payload[0] = 0x7F; //broadcast
     payload[1] = REG_ALERT_STATUS;//Alert Status
     payload[2] = 0xFF;//data to cause a reset
@@ -290,14 +298,14 @@ Pulling the boards out of sleep only to check voltage decay and temperature when
 void BMSModuleManager::sleepBoards()
 {
     uint8_t payload[3];
-    uint8_t buff[8];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_SMALL];
     applyWatchdogReset();
     payload[0] = 0x7F; //broadcast
     payload[1] = REG_IO_CTRL;//IO ctrl start
     payload[2] = 0x04;//write sleep bit
     BMSUtil::sendData(payload, 3, true);
     delay(BMS_COMMAND_DELAY_MS);
-    BMSUtil::getReply(buff, 8);
+    BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_SMALL);
 }
 
 /*
@@ -307,30 +315,34 @@ Wakes all the boards up and clears thier SLEEP state bit in the Alert Status Reg
 void BMSModuleManager::wakeBoards()
 {
     uint8_t payload[3];
-    uint8_t buff[8];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_SMALL];
     applyWatchdogReset();
     payload[0] = 0x7F; //broadcast
     payload[1] = REG_IO_CTRL;//IO ctrl start
     payload[2] = 0x00;//write sleep bit
     BMSUtil::sendData(payload, 3, true);
     delay(BMS_COMMAND_DELAY_MS);
-    BMSUtil::getReply(buff, 8);
+    BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_SMALL);
   
     payload[0] = 0x7F; //broadcast
     payload[1] = REG_ALERT_STATUS;//Fault Status
     payload[2] = 0x04;//data to cause a reset
     BMSUtil::sendData(payload, 3, true);
     delay(BMS_COMMAND_DELAY_MS);
-    BMSUtil::getReply(buff, 8);
+    BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_SMALL);
     payload[0] = 0x7F; //broadcast
     payload[2] = 0x00;//data to clear
     BMSUtil::sendData(payload, 3, true);
     delay(BMS_COMMAND_DELAY_MS);
-    BMSUtil::getReply(buff, 8);
+    BMSUtil::getReply(buff, BMS_RESPONSE_BUFFER_SIZE_SMALL);
 }
 
 bool BMSModuleManager::collectTelemetry()
 {
+#if ENABLE_TIMING_INSTRUMENTATION
+    const uint32_t startTime = millis();
+#endif
+
     applyWatchdogReset();
     const PackTelemetry previousTelemetry = telemetry_;
     PackTelemetry newTelemetry = previousTelemetry;
@@ -493,6 +505,19 @@ bool BMSModuleManager::collectTelemetry()
     }
 
     telemetry_ = newTelemetry;
+
+#if ENABLE_TIMING_INSTRUMENTATION
+    const uint32_t endTime = millis();
+    const uint32_t elapsedMs = endTime - startTime;
+    Logger::info("collectTelemetry() completed in %u ms (modules: present=%d, read=%d, failed=%d)",
+                 elapsedMs, modulesPresent, modulesRead, modulesFailed);
+    // Warn if execution time is approaching watchdog timeout
+    if (elapsedMs > (WDT_TIMEOUT * 1000) / 2) {
+        Logger::warn("collectTelemetry() took %u ms, approaching watchdog timeout of %d seconds",
+                     elapsedMs, WDT_TIMEOUT);
+    }
+#endif
+
     return telemetry_.hasData;
 }
 
@@ -568,24 +593,53 @@ bool BMSModuleManager::isFaulted() const
 
 void BMSModuleManager::setBatteryID(int id)
 {
+    if (id < BATTERY_ID_MIN || id > BATTERY_ID_MAX) {
+        Logger::error("Invalid battery ID %d (valid range: %d-%d), keeping current value %d",
+                      id, BATTERY_ID_MIN, BATTERY_ID_MAX, batteryID);
+        return;
+    }
     batteryID = id;
+    Logger::info("Battery ID set to %d", batteryID);
 }
 
 void BMSModuleManager::setPstrings(int Pstrings)
 {
+    if (Pstrings < PSTRING_MIN || Pstrings > PSTRING_MAX) {
+        Logger::error("Invalid parallel string count %d (valid range: %d-%d), keeping current value %d",
+                      Pstrings, PSTRING_MIN, PSTRING_MAX, Pstring);
+        return;
+    }
     Pstring = Pstrings;
+    Logger::info("Parallel string count set to %d", Pstring);
 }
 
-void BMSModuleManager::setSensors(int sensor,float Ignore)
+void BMSModuleManager::setSensors(int sensor, float Ignore)
 {
+  // Validate sensor parameter (0 = both sensors, 1 = sensor 0, 2 = sensor 1)
+  if (sensor < 0 || sensor > 2) {
+      Logger::error("Invalid sensor selection %d (valid: 0=both, 1=sensor0, 2=sensor1)", sensor);
+      return;
+  }
+
+  // Validate Ignore parameter (should be a reasonable cell voltage or 0)
+  if (Ignore < 0.0f || (Ignore > 0.0f && Ignore < VOLTAGE_SETPOINT_MIN)) {
+      Logger::error("Invalid ignore cell voltage %f (must be 0 or >= %f)",
+                    Ignore, VOLTAGE_SETPOINT_MIN);
+      return;
+  }
+
+  int moduleCount = 0;
   for (int x = 1; x <= MAX_MODULE_ADDR; x++)
-    {
-        if (modules[x].isExisting()) 
-        {
-          modules[x].settempsensor(sensor);
-          modules[x].setIgnoreCell(Ignore);
-        }
-    }
+  {
+      if (modules[x].isExisting())
+      {
+        modules[x].settempsensor(sensor);
+        modules[x].setIgnoreCell(Ignore);
+        moduleCount++;
+      }
+  }
+  Logger::info("Sensor configuration updated for %d modules (sensor=%d, ignore=%fV)",
+               moduleCount, sensor, Ignore);
 }
 
 float BMSModuleManager::getAvgTemperature()

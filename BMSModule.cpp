@@ -37,7 +37,7 @@ Reading the status of the board to identify any flags, will be more useful when 
 bool BMSModule::readStatus()
 {
   uint8_t payload[3];
-  uint8_t buff[8];
+  uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_STATUS];
   payload[0] = moduleAddress << 1; // address
   payload[1] = REG_ALERT_STATUS;   // Alert Status start
   payload[2] = 0x04;
@@ -120,7 +120,7 @@ void BMSModule::readSetpoint()
 bool BMSModule::readModuleValues()
 {
     uint8_t payload[4];
-    uint8_t buff[50];
+    uint8_t buff[BMS_RESPONSE_BUFFER_SIZE_GENERAL];
     uint8_t calcCRC;
     bool retVal = false;
     int retLen;
@@ -149,19 +149,47 @@ bool BMSModule::readModuleValues()
                 
     payload[1] = REG_GPAI; //start reading registers at the module voltage registers
     payload[2] = 0x12; //read 18 bytes (Each value takes 2 - ModuleV, CellV1-6, Temp1, Temp2)
-    retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, 22);
-    if (retLen != 22)
+
+    // Retry logic for module value reading with CRC validation
+    int attempts = 0;
+    bool readSuccess = false;
+
+    while (attempts < BMS_COMM_RETRY_COUNT && !readSuccess)
     {
-        Logger::warn("Module %i returned unexpected length: %i", moduleAddress, retLen);
-        return retVal;
+        attempts++;
+        retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, BMS_RESPONSE_BUFFER_SIZE_MODULE);
+
+        if (retLen != BMS_RESPONSE_BUFFER_SIZE_MODULE)
+        {
+            Logger::warn("Module %i returned unexpected length: %i (expected %i), attempt %i/%i",
+                         moduleAddress, retLen, BMS_RESPONSE_BUFFER_SIZE_MODULE, attempts, BMS_COMM_RETRY_COUNT);
+            if (attempts < BMS_COMM_RETRY_COUNT) {
+                delay(BMS_COMMAND_DELAY_MS);
+                continue;
+            }
+            return retVal;
+        }
+
+        calcCRC = BMSUtil::genCRC(buff, retLen-1);
+        Logger::debug("Sent CRC: %x     Calculated CRC: %x", buff[retLen-1], calcCRC);
+
+        //18 data bytes, address, command, length, and CRC = 22 bytes returned
+        //Also validate CRC to ensure we didn't get garbage data.
+        if (buff[retLen-1] != calcCRC)
+        {
+            Logger::warn("Module %i CRC mismatch (got %x, expected %x), attempt %i/%i",
+                         moduleAddress, buff[retLen-1], calcCRC, attempts, BMS_COMM_RETRY_COUNT);
+            if (attempts < BMS_COMM_RETRY_COUNT) {
+                delay(BMS_COMMAND_DELAY_MS);
+                continue;
+            }
+            return retVal;
+        }
+
+        readSuccess = true;
     }
 
-    calcCRC = BMSUtil::genCRC(buff, retLen-1);
-    Logger::debug("Sent CRC: %x     Calculated CRC: %x", buff[21], calcCRC);
-
-    //18 data bytes, address, command, length, and CRC = 22 bytes returned
-    //Also validate CRC to ensure we didn't get garbage data.
-    if (buff[21] == calcCRC)
+    if (readSuccess)
     {
         if (buff[0] == (moduleAddress << 1) && buff[1] == REG_GPAI && buff[2] == 0x12) //Also ensure this is actually the reply to our intended query
         {
@@ -211,6 +239,11 @@ bool BMSModule::readModuleValues()
                 temperatures[0] = NAN;
             } else {
                 temperatures[0] = decodedTemp0;
+                // Range validation - warn if temperature is outside expected operating range
+                if (decodedTemp0 < TEMP_MIN_VALID || decodedTemp0 > TEMP_MAX_VALID) {
+                    Logger::warn("Module %i temperature sensor 0 reading %.1f°C is outside valid range (%.0f to %.0f°C)",
+                                 moduleAddress, decodedTemp0, TEMP_MIN_VALID, TEMP_MAX_VALID);
+                }
             }
 
             if (isnan(decodedTemp1)) {
@@ -218,6 +251,11 @@ bool BMSModule::readModuleValues()
                 temperatures[1] = NAN;
             } else {
                 temperatures[1] = decodedTemp1;
+                // Range validation - warn if temperature is outside expected operating range
+                if (decodedTemp1 < TEMP_MIN_VALID || decodedTemp1 > TEMP_MAX_VALID) {
+                    Logger::warn("Module %i temperature sensor 1 reading %.1f°C is outside valid range (%.0f to %.0f°C)",
+                                 moduleAddress, decodedTemp1, TEMP_MIN_VALID, TEMP_MAX_VALID);
+                }
             }
 
             float moduleLowTemp = getLowTemp();

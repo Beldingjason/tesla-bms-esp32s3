@@ -58,6 +58,10 @@
 // Range: 10-100ms
 #define BMS_READ_DELAY_MS 50
 
+// Delay during module setup/addressing operations
+// Range: 2-10ms
+#define BMS_SETUP_DELAY_MS 3
+
 // Time limit for cell balancing resistors (per Tesla specification)
 // Range: 10-300 seconds
 // Hardware safety limit - balancing stops after this time if not retriggered
@@ -156,5 +160,53 @@
 // Per Tesla specification: 50mV
 // Lower values balance more aggressively, higher values reduce balancing cycles
 #define BMS_BALANCE_VOLTAGE_DELTA 0.050f
+
+// =====================================================================
+// BMS COMMUNICATION BUFFER SIZES
+// =====================================================================
+
+// Buffer sizes for BMS module communication responses
+// These are based on the Tesla BMS protocol specification
+#define BMS_RESPONSE_BUFFER_SIZE_SMALL 8      // For short responses (status, simple queries)
+#define BMS_RESPONSE_BUFFER_SIZE_STATUS 8     // For status register reads (alerts, faults)
+#define BMS_RESPONSE_BUFFER_SIZE_MODULE 22    // For module values (voltages, temperatures)
+#define BMS_RESPONSE_BUFFER_SIZE_GENERAL 30   // For general operations (setup, config)
+
+// =====================================================================
+// TEMPERATURE VALIDATION CONSTANTS
+// =====================================================================
+
+// Valid temperature range for Tesla battery modules
+// Based on lithium-ion operating specifications and sensor capabilities
+#define TEMP_MIN_VALID -40.0f   // Minimum valid temperature (°C)
+#define TEMP_MAX_VALID 85.0f    // Maximum valid temperature (°C)
+
+// =====================================================================
+// INPUT VALIDATION CONSTANTS
+// =====================================================================
+
+// Valid range for parallel string configuration
+#define PSTRING_MIN 1           // Minimum parallel strings
+#define PSTRING_MAX 100         // Maximum parallel strings (reasonable limit)
+
+// Valid range for battery ID
+#define BATTERY_ID_MIN 0        // Minimum battery ID
+#define BATTERY_ID_MAX 255      // Maximum battery ID (8-bit value)
+
+// Valid voltage setpoint ranges (per cell, in volts)
+#define VOLTAGE_SETPOINT_MIN 2.5f    // Minimum safe cell voltage
+#define VOLTAGE_SETPOINT_MAX 4.3f    // Maximum safe cell voltage
+
+// Valid temperature setpoint ranges (in °C)
+#define TEMP_SETPOINT_MIN -40.0f     // Minimum temperature setpoint
+#define TEMP_SETPOINT_MAX 100.0f     // Maximum temperature setpoint
+
+// =====================================================================
+// WATCHDOG AND TIMING INSTRUMENTATION
+// =====================================================================
+
+// Enable/disable performance timing measurements
+// Set to 1 to enable detailed timing logs for watchdog verification
+#define ENABLE_TIMING_INSTRUMENTATION 0
 
 #endif // CONSTANTS_H_

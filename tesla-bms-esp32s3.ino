@@ -42,8 +42,15 @@ struct AppContext {
 
 // Buffer sizes with 20% safety margin
 constexpr size_t PACK_STATUS_BUFFER_SIZE = 230;  // 192 + 20% safety margin
-constexpr size_t MODULE_STATUS_BUFFER_SIZE = (MAX_MODULE_ADDR + 1) * 96;  // 80 bytes per module + 20% safety margin
+constexpr size_t MODULE_STATUS_BYTES_PER_MODULE = 96;  // ~80 bytes per module + 20% safety margin
+constexpr size_t MODULE_STATUS_BUFFER_SIZE = (MAX_MODULE_ADDR + 1) * MODULE_STATUS_BYTES_PER_MODULE;
 constexpr size_t DISPLAY_BUFFER_SIZE = PACK_STATUS_BUFFER_SIZE + MODULE_STATUS_BUFFER_SIZE;
+
+// Compile-time assertion to ensure buffer size calculations are reasonable
+static_assert(MODULE_STATUS_BYTES_PER_MODULE >= 80,
+              "MODULE_STATUS_BYTES_PER_MODULE must be at least 80 bytes to hold formatted module data");
+static_assert(MODULE_STATUS_BUFFER_SIZE <= 32768,
+              "MODULE_STATUS_BUFFER_SIZE exceeds reasonable limit (likely configuration error)");
 
 AppContext appContext;
 char packStatusBuffer[PACK_STATUS_BUFFER_SIZE];
@@ -193,10 +200,19 @@ static void initializeLvgl(esp_lcd_panel_handle_t panel_handle) {
   lv_init();
   lv_disp_buf = (lv_color_t *)heap_caps_malloc(LVGL_LCD_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
   if (lv_disp_buf == NULL) {
-    SERIALCONSOLE.println("ERROR: Failed to allocate LVGL display buffer!");
-    while (1) {
-      delay(1000);
-    }
+    SERIALCONSOLE.println("FATAL ERROR: Failed to allocate LVGL display buffer!");
+    SERIALCONSOLE.printf("Requested: %zu bytes (DMA + Internal)\n", LVGL_LCD_BUF_SIZE * sizeof(lv_color_t));
+    SERIALCONSOLE.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
+    SERIALCONSOLE.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+    SERIALCONSOLE.println("System will reset via watchdog in 10 seconds...");
+
+    // Display error on LCD if possible (may not work without buffer, but try)
+    // Then let watchdog reset the system for recovery attempt
+    delay(10000);
+
+    // If watchdog didn't trigger, force a restart
+    SERIALCONSOLE.println("Forcing system restart...");
+    ESP.restart();
   }
 
   lv_disp_draw_buf_init(&disp_buf, lv_disp_buf, NULL, LVGL_LCD_BUF_SIZE);
@@ -257,10 +273,14 @@ static void appendModuleSummaryLine(char *buffer,
   }
 
   if (written < 0) {
+    Logger::error("Failed to format module %d summary (snprintf error)", index);
     return;
   }
 
   if (static_cast<size_t>(written) >= bufferSize - offset) {
+    // Buffer overflow - truncate and warn
+    Logger::warn("Module %d summary truncated (needed %d bytes, had %zu available)",
+                 index, written, bufferSize - offset);
     offset = bufferSize - 1;
     buffer[offset] = '\0';
   } else {
