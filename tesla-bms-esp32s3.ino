@@ -41,7 +41,7 @@ struct AppContext {
 };
 
 constexpr size_t PACK_STATUS_BUFFER_SIZE = 192;
-constexpr size_t MODULE_STATUS_BUFFER_SIZE = 2048;
+constexpr size_t MODULE_STATUS_BUFFER_SIZE = (MAX_MODULE_ADDR + 1) * 80;  // Enough room for every module line
 constexpr size_t DISPLAY_BUFFER_SIZE = PACK_STATUS_BUFFER_SIZE + MODULE_STATUS_BUFFER_SIZE;
 
 AppContext appContext;

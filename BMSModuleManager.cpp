@@ -4,6 +4,7 @@
 #include "Logger.h"
 #include "pin_config.h"
 #include "constants.h"
+#include <math.h>
 
 BMSModuleManager::BMSModuleManager()
     : watchdogCallback_(nullptr),
@@ -320,6 +321,7 @@ bool BMSModuleManager::collectTelemetry()
     bool anyData = false;
     int modulesRead = 0;
     int modulesFailed = 0;
+    bool anyTemperatureData = false;
 
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
@@ -341,8 +343,18 @@ bool BMSModuleManager::collectTelemetry()
                 if (moduleTelemetry.lowCell < lowCell) lowCell = moduleTelemetry.lowCell;
                 if (moduleTelemetry.highCell > highCell) highCell = moduleTelemetry.highCell;
 
-                if (moduleTelemetry.lowTemp < lowestPackTempHistory_) lowestPackTempHistory_ = moduleTelemetry.lowTemp;
-                if (moduleTelemetry.highTemp > highestPackTempHistory_) highestPackTempHistory_ = moduleTelemetry.highTemp;
+                if (isfinite(moduleTelemetry.lowTemp)) {
+                    if (moduleTelemetry.lowTemp < lowestPackTempHistory_) {
+                        lowestPackTempHistory_ = moduleTelemetry.lowTemp;
+                    }
+                    anyTemperatureData = true;
+                }
+                if (isfinite(moduleTelemetry.highTemp)) {
+                    if (moduleTelemetry.highTemp > highestPackTempHistory_) {
+                        highestPackTempHistory_ = moduleTelemetry.highTemp;
+                    }
+                    anyTemperatureData = true;
+                }
 
                 anyData = true;
                 modulesRead++;
@@ -379,8 +391,8 @@ bool BMSModuleManager::collectTelemetry()
         newTelemetry.lowestPackVolt = lowestPackVoltHistory_;
         newTelemetry.highestPackVolt = highestPackVoltHistory_;
 
-        newTelemetry.lowestPackTemp = lowestPackTempHistory_;
-        newTelemetry.highestPackTemp = highestPackTempHistory_;
+        newTelemetry.lowestPackTemp = anyTemperatureData ? lowestPackTempHistory_ : NAN;
+        newTelemetry.highestPackTemp = anyTemperatureData ? highestPackTempHistory_ : NAN;
         newTelemetry.hasData = true;
     }
     else

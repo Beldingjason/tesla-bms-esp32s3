@@ -6,7 +6,7 @@
 #define GUI_UPDATE_INTERVAL_MS 5000
 #define PAGE_SWITCH_INTERVAL_MS 5000
 #define STATUS_UPDATE_INTERVAL_MS 1000
-#define WIFI_CONNECT_WAIT_MAX_MS 10000
+#define WIFI_CONNECT_WAIT_MAX_MS 30000  // WiFi connection timeout before falling back to SmartConfig
 #define STARTUP_DELAY_MS 3000
 #define BALANCE_TIME_MS (5 * 60 * 1000)  // 5 minutes
 
@@ -62,8 +62,5 @@
 // Balance configuration constants
 #define BMS_BALANCE_VOLTAGE_MIN 4.0f      // Volts - minimum voltage to allow balancing
 #define BMS_BALANCE_VOLTAGE_DELTA 0.050f  // Volts - 50mV delta to trigger balancing (Tesla spec)
-
-// WiFi timing constants
-#define WIFI_CONNECT_WAIT_MAX_MS 30000
 
 #endif // CONSTANTS_H_

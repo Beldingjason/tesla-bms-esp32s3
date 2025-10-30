@@ -208,20 +208,22 @@ bool BMSModule::readModuleValues()
 
             if (isnan(decodedTemp0)) {
                 Logger::warn("Module %i temperature sensor 0 returned invalid data (raw=%u)", moduleAddress, rawTemp0);
-                temperatures[0] = TEMP_INIT_FOR_MIN_TRACKING;  // Set to high value so it won't affect min tracking
+                temperatures[0] = NAN;
             } else {
                 temperatures[0] = decodedTemp0;
             }
 
             if (isnan(decodedTemp1)) {
                 Logger::warn("Module %i temperature sensor 1 returned invalid data (raw=%u)", moduleAddress, rawTemp1);
-                temperatures[1] = TEMP_INIT_FOR_MIN_TRACKING;  // Set to high value so it won't affect min tracking
+                temperatures[1] = NAN;
             } else {
                 temperatures[1] = decodedTemp1;
             }
 
-            if (isfinite(getLowTemp()) && getLowTemp() < lowestTemperature) lowestTemperature = getLowTemp();
-            if (isfinite(getHighTemp()) && getHighTemp() > highestTemperature) highestTemperature = getHighTemp();
+            float moduleLowTemp = getLowTemp();
+            float moduleHighTemp = getHighTemp();
+            if (isfinite(moduleLowTemp) && moduleLowTemp < lowestTemperature) lowestTemperature = moduleLowTemp;
+            if (isfinite(moduleHighTemp) && moduleHighTemp > highestTemperature) highestTemperature = moduleHighTemp;
 
             Logger::debug("Got voltage and temperature readings");
             retVal = true;
@@ -321,23 +323,60 @@ float BMSModule::getLowestTemp()
 
 float BMSModule::getLowTemp()
 {
-   return (temperatures[0] < temperatures[1]) ? temperatures[0] : temperatures[1]; 
+   bool temp0Valid = isfinite(temperatures[0]);
+   bool temp1Valid = isfinite(temperatures[1]);
+   if (temp0Valid && temp1Valid) {
+       return (temperatures[0] < temperatures[1]) ? temperatures[0] : temperatures[1];
+   }
+   if (temp0Valid) {
+       return temperatures[0];
+   }
+   if (temp1Valid) {
+       return temperatures[1];
+   }
+   return NAN;
 }
 
 float BMSModule::getHighTemp()
 {
-   return (temperatures[0] < temperatures[1]) ? temperatures[1] : temperatures[0];     
+   bool temp0Valid = isfinite(temperatures[0]);
+   bool temp1Valid = isfinite(temperatures[1]);
+   if (temp0Valid && temp1Valid) {
+       return (temperatures[0] > temperatures[1]) ? temperatures[0] : temperatures[1];
+   }
+   if (temp0Valid) {
+       return temperatures[0];
+   }
+   if (temp1Valid) {
+       return temperatures[1];
+   }
+   return NAN;
 }
 
 float BMSModule::getAvgTemp()
 {
   if (sensor == 0)
   {
-    return (temperatures[0] + temperatures[1]) / 2.0f;
+    bool temp0Valid = isfinite(temperatures[0]);
+    bool temp1Valid = isfinite(temperatures[1]);
+    if (temp0Valid && temp1Valid) {
+        return (temperatures[0] + temperatures[1]) / 2.0f;
+    }
+    if (temp0Valid) {
+        return temperatures[0];
+    }
+    if (temp1Valid) {
+        return temperatures[1];
+    }
+    return NAN;
   }
   else
   {
-    return temperatures[sensor-1];
+    int index = sensor - 1;
+    if (index < 0 || index > 1) {
+        return NAN;
+    }
+    return isfinite(temperatures[index]) ? temperatures[index] : NAN;
   }
 }
 
