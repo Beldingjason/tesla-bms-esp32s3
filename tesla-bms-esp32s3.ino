@@ -40,8 +40,9 @@ struct AppContext {
   uint32_t lastBalanceMs = 0;
 };
 
-constexpr size_t PACK_STATUS_BUFFER_SIZE = 192;
-constexpr size_t MODULE_STATUS_BUFFER_SIZE = (MAX_MODULE_ADDR + 1) * 80;  // Enough room for every module line
+// Buffer sizes with 20% safety margin
+constexpr size_t PACK_STATUS_BUFFER_SIZE = 230;  // 192 + 20% safety margin
+constexpr size_t MODULE_STATUS_BUFFER_SIZE = (MAX_MODULE_ADDR + 1) * 96;  // 80 bytes per module + 20% safety margin
 constexpr size_t DISPLAY_BUFFER_SIZE = PACK_STATUS_BUFFER_SIZE + MODULE_STATUS_BUFFER_SIZE;
 
 AppContext appContext;
@@ -317,20 +318,27 @@ static void maintainBalancingState(AppContext &context,
     return;
   }
 
-  // Check if balancing timeout has elapsed (handles millis() wraparound correctly)
-  if (context.lastBalanceMs > 0 && (nowMs - context.lastBalanceMs) >= BALANCE_TIME_MS) {
+  // Determine if cells currently need balancing
+  bool cellsNeedBalancing = (telemetry.highestCell > BMS_BALANCE_VOLTAGE_MIN &&
+                             telemetry.highestCell > (telemetry.lowestCell + BMS_BALANCE_VOLTAGE_DELTA));
+
+  // If cells don't need balancing, stop reporting as balancing
+  if (!cellsNeedBalancing) {
     context.isBalancing = false;
+    return;
   }
 
-  // Check if we should start balancing
-  if (telemetry.highestCell > BMS_BALANCE_VOLTAGE_MIN &&
-      telemetry.highestCell > (telemetry.lowestCell + BMS_BALANCE_VOLTAGE_DELTA)) {
-    // Start balancing if never balanced before, or if enough time has passed (handles wraparound)
-    if (context.lastBalanceMs == 0 || (nowMs - context.lastBalanceMs) >= BALANCE_TIME_MS) {
-      bms.balanceCells();
-      context.isBalancing = true;
-      context.lastBalanceMs = nowMs;
-    }
+  // Check if balancing timeout has elapsed (handles millis() wraparound correctly)
+  bool timeoutElapsed = (context.lastBalanceMs > 0 && (nowMs - context.lastBalanceMs) >= BALANCE_TIME_MS);
+
+  // Start or restart balancing if needed and enough time has passed
+  if (context.lastBalanceMs == 0 || timeoutElapsed) {
+    bms.balanceCells();
+    context.isBalancing = true;
+    context.lastBalanceMs = nowMs;
+  } else {
+    // Within the balance interval, keep reporting as balancing if cells need it
+    context.isBalancing = cellsNeedBalancing;
   }
 }
 

@@ -16,6 +16,8 @@ public:
         float cellDelta = 0.0f;
         float lowTemp = 0.0f;
         float highTemp = 0.0f;
+        bool tempSensor0Fault = false;
+        bool tempSensor1Fault = false;
     };
 
     struct ModuleCommStats {
@@ -39,6 +41,7 @@ public:
         float lowestPackTemp = 0.0f;
         float highestPackTemp = 0.0f;
         bool faultPinActive = false;
+        bool anyTempSensorFaults = false;
         ModuleTelemetry modules[MAX_MODULE_ADDR + 1];
     };
 
@@ -75,11 +78,13 @@ public:
     const ModuleCommStats& getModuleCommStats(int moduleIndex) const;
     void resetModuleCommStats(int moduleIndex);
     void resetAllCommStats();
+    void resetHistoricalData();
     /*
     void processCANMsg(CAN_FRAME &frame);
     */
     void printPackSummary();
     void printPackDetails();
+    void printDiagnostics();
     
 
 private:

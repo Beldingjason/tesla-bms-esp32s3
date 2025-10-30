@@ -33,6 +33,10 @@ void BMSModuleManager::balanceCells()
     uint8_t payload[4];
     uint8_t buff[30];
     uint8_t balance = 0;//bit 0 - 5 are to activate cell balancing 1-6
+    int modulesBalanced = 0;
+    int modulesSkippedLowVoltage = 0;
+    int modulesSkippedInvalidData = 0;
+    int modulesSkippedAlreadyBalanced = 0;
 
     for (int address = 1; address <= MAX_MODULE_ADDR; address++)
     {
@@ -42,12 +46,15 @@ void BMSModuleManager::balanceCells()
         float moduleLow = modules[address].getLowCellV();
         float moduleHigh = modules[address].getHighCellV();
         if (moduleHigh < BMS_BALANCE_VOLTAGE_MIN) {
+            modulesSkippedLowVoltage++;
             continue;
         }
         if (moduleLow <= 0.0f) {
+            modulesSkippedInvalidData++;
             continue;
         }
         if ((moduleHigh - moduleLow) < BMS_BALANCE_VOLTAGE_DELTA) {
+            modulesSkippedAlreadyBalanced++;
             continue;
         }
 
@@ -83,6 +90,9 @@ void BMSModuleManager::balanceCells()
                 continue;
             }
 
+            modulesBalanced++;
+            Logger::debug("Module %i balancing cells (mask: 0x%02X)", address, balance);
+
             if (Logger::isDebug()) //read registers back out to check if everthing is good
             {
                 delay(BMS_READ_DELAY_MS);
@@ -103,6 +113,12 @@ void BMSModuleManager::balanceCells()
         }
       }
     }
+
+    // Log balancing summary
+    Logger::info("Balancing cycle: %d modules balanced, %d skipped (low voltage: %d, invalid data: %d, already balanced: %d)",
+                 modulesBalanced,
+                 modulesSkippedLowVoltage + modulesSkippedInvalidData + modulesSkippedAlreadyBalanced,
+                 modulesSkippedLowVoltage, modulesSkippedInvalidData, modulesSkippedAlreadyBalanced);
 }
 
 /*
@@ -119,13 +135,16 @@ void BMSModuleManager::setupBoards()
     uint8_t payload[3];
     uint8_t buff[10];
     int retLen;
+    const int MAX_SETUP_ITERATIONS = 100;
+    int iteration = 0;
 
     payload[0] = 0;
     payload[1] = 0;
     payload[2] = 1;
-    
-    while (1 == 1)
+
+    while (iteration < MAX_SETUP_ITERATIONS)
     {
+        iteration++;
         applyWatchdogReset();
         payload[0] = 0;
         payload[1] = 0;
@@ -137,7 +156,7 @@ void BMSModuleManager::setupBoards()
             {
                 Logger::debug("00 found");
                 //look for a free address to use
-                for (int y = 1; y < MAX_BMS_MODULES; y++) 
+                for (int y = 1; y < MAX_BMS_MODULES; y++)
                 {
                     applyWatchdogReset();
                     if (!modules[y].isExisting())
@@ -149,7 +168,7 @@ void BMSModuleManager::setupBoards()
                         delay(3);
                         if (BMSUtil::getReply(buff, 10) > 2)
                         {
-                            if (buff[0] == (0x81) && buff[1] == REG_ADDR_CTRL && buff[2] == (y + 0x80)) 
+                            if (buff[0] == (0x81) && buff[1] == REG_ADDR_CTRL && buff[2] == (y + 0x80))
                             {
                                 modules[y].setExists(true);
                                 numFoundModules++;
@@ -163,6 +182,10 @@ void BMSModuleManager::setupBoards()
             else break; //nobody responded properly to the zero address so our work here is done.
         }
         else break;
+    }
+
+    if (iteration >= MAX_SETUP_ITERATIONS) {
+        Logger::warn("setupBoards() reached maximum iterations (%d), aborting", MAX_SETUP_ITERATIONS);
     }
 }
 
@@ -322,6 +345,7 @@ bool BMSModuleManager::collectTelemetry()
     int modulesRead = 0;
     int modulesFailed = 0;
     bool anyTemperatureData = false;
+    bool anyTempSensorFaults = false;
 
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
@@ -354,6 +378,11 @@ bool BMSModuleManager::collectTelemetry()
                         highestPackTempHistory_ = moduleTelemetry.highTemp;
                     }
                     anyTemperatureData = true;
+                }
+
+                // Track temperature sensor faults
+                if (moduleTelemetry.tempSensor0Fault || moduleTelemetry.tempSensor1Fault) {
+                    anyTempSensorFaults = true;
                 }
 
                 anyData = true;
@@ -412,6 +441,11 @@ bool BMSModuleManager::collectTelemetry()
     }
     isFaulted_ = newTelemetry.faultPinActive;
 
+    newTelemetry.anyTempSensorFaults = anyTempSensorFaults;
+    if (anyTempSensorFaults) {
+        Logger::warn("One or more temperature sensors are reporting invalid readings");
+    }
+
     telemetry_ = newTelemetry;
     return telemetry_.hasData;
 }
@@ -441,6 +475,11 @@ bool BMSModuleManager::updateModuleTelemetry(int moduleIndex, ModuleTelemetry &o
     outTelemetry.cellDelta = outTelemetry.highCell - outTelemetry.lowCell;
     outTelemetry.lowTemp = modules[moduleIndex].getLowTemp();
     outTelemetry.highTemp = modules[moduleIndex].getHighTemp();
+
+    // Check for temperature sensor faults
+    outTelemetry.tempSensor0Fault = !isfinite(modules[moduleIndex].getTemperature(0));
+    outTelemetry.tempSensor1Fault = !isfinite(modules[moduleIndex].getTemperature(1));
+
     return true;
 }
 
@@ -506,24 +545,23 @@ void BMSModuleManager::setSensors(int sensor,float Ignore)
 float BMSModuleManager::getAvgTemperature()
 {
     float avg = 0.0f;
-    int y = 0; //counter for modules below -70 (no sensors connected)
+    int validCount = 0;
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
         if (modules[x].isExisting())
         {
-          if (modules[x].getAvgTemp() > -70)
+          float avgTemp = modules[x].getAvgTemp();
+          if (isfinite(avgTemp))
           {
-            avg += modules[x].getAvgTemp();
-          }
-          else
-          {
-            y++;
+            avg += avgTemp;
+            validCount++;
           }
         }
     }
-    int validModules = numFoundModules - y;
-    if (validModules > 0) {
-        avg = avg / (float)validModules;
+    if (validCount > 0) {
+        avg = avg / (float)validCount;
+    } else {
+        return NAN;
     }
 
     return avg;
@@ -738,4 +776,85 @@ void BMSModuleManager::resetAllCommStats()
         commStats_[i].successCount = 0;
         commStats_[i].failureCount = 0;
     }
+}
+
+void BMSModuleManager::resetHistoricalData()
+{
+    lowestPackVoltHistory_ = 1000.0f;
+    highestPackVoltHistory_ = 0.0f;
+    lowestPackTempHistory_ = TEMP_INIT_FOR_MIN_TRACKING;
+    highestPackTempHistory_ = TEMP_INIT_FOR_MAX_TRACKING;
+
+    // Reset module-level historical data
+    for (int i = 0; i <= MAX_MODULE_ADDR; i++) {
+        if (modules[i].isExisting()) {
+            // Module historical data is maintained by the BMSModule class internally
+            // If we need to reset it, we would need to add methods to BMSModule class
+        }
+    }
+
+    Logger::info("Historical min/max data has been reset");
+}
+
+void BMSModuleManager::printDiagnostics()
+{
+    Logger::console("");
+    Logger::console("=== BMS DIAGNOSTICS ===");
+    Logger::console("");
+    Logger::console("System Status:");
+    Logger::console("  Found Modules: %d", numFoundModules);
+    Logger::console("  Parallel Strings: %d", Pstring);
+    Logger::console("  Pack Faulted: %s", isFaulted_ ? "YES" : "NO");
+    Logger::console("  Temp Sensor Faults: %s", telemetry_.anyTempSensorFaults ? "YES" : "NO");
+    Logger::console("");
+    Logger::console("Historical Data:");
+    Logger::console("  Pack Voltage Range: %.2fV - %.2fV", lowestPackVoltHistory_, highestPackVoltHistory_);
+    if (isfinite(lowestPackTempHistory_) && isfinite(highestPackTempHistory_)) {
+        Logger::console("  Pack Temp Range: %.1fC - %.1fC", lowestPackTempHistory_, highestPackTempHistory_);
+    } else {
+        Logger::console("  Pack Temp Range: N/A");
+    }
+    Logger::console("");
+    Logger::console("Module Communication Statistics:");
+    Logger::console("  Mod#  Success   Fail    Total   Success Rate");
+    Logger::console("  ----  -------  ------  -------  ------------");
+
+    for (int i = 1; i <= MAX_MODULE_ADDR; i++) {
+        if (modules[i].isExisting()) {
+            const ModuleCommStats& stats = commStats_[i];
+            uint32_t total = stats.getTotalAttempts();
+            if (total > 0) {
+                Logger::console("   %2d   %7u  %6u  %7u     %5.1f%%",
+                               i,
+                               stats.successCount,
+                               stats.failureCount,
+                               total,
+                               stats.getSuccessRate());
+            } else {
+                Logger::console("   %2d   No data collected yet", i);
+            }
+        }
+    }
+
+    Logger::console("");
+    Logger::console("Per-Module Temperature Sensor Status:");
+    bool anyFaults = false;
+    for (int i = 1; i <= MAX_MODULE_ADDR; i++) {
+        if (modules[i].isExisting() && telemetry_.modules[i].telemetryValid) {
+            if (telemetry_.modules[i].tempSensor0Fault || telemetry_.modules[i].tempSensor1Fault) {
+                Logger::console("  Module %d: Sensor 0: %s, Sensor 1: %s",
+                               i,
+                               telemetry_.modules[i].tempSensor0Fault ? "FAULT" : "OK",
+                               telemetry_.modules[i].tempSensor1Fault ? "FAULT" : "OK");
+                anyFaults = true;
+            }
+        }
+    }
+    if (!anyFaults) {
+        Logger::console("  All temperature sensors OK");
+    }
+
+    Logger::console("");
+    Logger::console("======================");
+    Logger::console("");
 }
