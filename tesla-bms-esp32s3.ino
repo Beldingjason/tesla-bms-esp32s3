@@ -79,6 +79,7 @@ static void formatStatusBuffers(const BMSModuleManager::PackTelemetry &telemetry
 static int computeStateOfChargePercent(float packVoltage);
 static void maintainBalancingState(AppContext &context, const BMSModuleManager::PackTelemetry &telemetry, uint32_t nowMs);
 static void appendModuleSummaryLine(char *buffer, size_t bufferSize, size_t &offset, int index, const BMSModuleManager::ModuleTelemetry &module);
+static void watchdogResetShim();
 
 static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx) {
   if (is_initialized_lvgl) {
@@ -107,6 +108,10 @@ static void configurePowerRails() {
 static void configureWatchdog() {
   esp_task_wdt_init(WDT_TIMEOUT, true);
   esp_task_wdt_add(NULL); // Add current thread to WDT watch
+}
+
+static void watchdogResetShim() {
+  (void)esp_task_wdt_reset();
 }
 
 static void configureSerialConsole() {
@@ -212,7 +217,7 @@ static void initializeUserInterface(AppContext &context) {
 }
 
 static void configureBmsSubsystem() {
-  bms.setWatchdogCallback(&esp_task_wdt_reset);
+  bms.setWatchdogCallback(&watchdogResetShim);
   bms.renumberBoardIDs();
   Logger::setLoglevel(Logger::Off); // Debug = 0, Info = 1, Warn = 2, Error = 3, Off = 4
   bms.findBoards();

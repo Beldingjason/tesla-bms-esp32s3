@@ -332,69 +332,79 @@ void BMSModuleManager::wakeBoards()
 bool BMSModuleManager::collectTelemetry()
 {
     applyWatchdogReset();
-    PackTelemetry newTelemetry;
-    newTelemetry.lowestPackVolt = lowestPackVoltHistory_;
-    newTelemetry.highestPackVolt = highestPackVoltHistory_;
-    newTelemetry.lowestPackTemp = lowestPackTempHistory_;
-    newTelemetry.highestPackTemp = highestPackTempHistory_;
+    const PackTelemetry previousTelemetry = telemetry_;
+    PackTelemetry newTelemetry = previousTelemetry;
 
+    float candidateLowestPackVolt = lowestPackVoltHistory_;
+    float candidateHighestPackVolt = highestPackVoltHistory_;
+    float candidateLowestPackTemp = lowestPackTempHistory_;
+    float candidateHighestPackTemp = highestPackTempHistory_;
     float packVoltageSum = 0.0f;
     float lowCell = 1000.0f;
     float highCell = -1000.0f;
-    bool anyData = false;
-    int modulesRead = 0;
-    int modulesFailed = 0;
     bool anyTemperatureData = false;
     bool anyTempSensorFaults = false;
+    int modulesPresent = 0;
+    int modulesRead = 0;
+    int modulesFailed = 0;
 
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
-        ModuleTelemetry moduleTelemetry;
+        ModuleTelemetry moduleTelemetry = previousTelemetry.modules[x];
         moduleTelemetry.present = modules[x].isExisting();
 
-        if (moduleTelemetry.present)
+        if (!moduleTelemetry.present)
         {
-            applyWatchdogReset();
-            Logger::debug("");
-            Logger::debug("Module %i exists. Reading voltage and temperature values", x);
-            moduleTelemetry.telemetryValid = updateModuleTelemetry(x, moduleTelemetry);
-            if (moduleTelemetry.telemetryValid)
-            {
-                Logger::debug("Module voltage: %f", moduleTelemetry.moduleVoltage);
-                Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", moduleTelemetry.lowCell, moduleTelemetry.highCell);
+            moduleTelemetry = ModuleTelemetry{};
+            newTelemetry.modules[x] = moduleTelemetry;
+            continue;
+        }
 
-                packVoltageSum += moduleTelemetry.moduleVoltage;
-                if (moduleTelemetry.lowCell < lowCell) lowCell = moduleTelemetry.lowCell;
-                if (moduleTelemetry.highCell > highCell) highCell = moduleTelemetry.highCell;
+        modulesPresent++;
+        applyWatchdogReset();
+        Logger::debug("");
+        Logger::debug("Module %i exists. Reading voltage and temperature values", x);
 
-                if (isfinite(moduleTelemetry.lowTemp)) {
-                    if (moduleTelemetry.lowTemp < lowestPackTempHistory_) {
-                        lowestPackTempHistory_ = moduleTelemetry.lowTemp;
-                    }
-                    anyTemperatureData = true;
+        ModuleTelemetry freshTelemetry = moduleTelemetry;
+        freshTelemetry.telemetryValid = false;
+        bool moduleReadOk = updateModuleTelemetry(x, freshTelemetry);
+        if (moduleReadOk)
+        {
+            moduleTelemetry = freshTelemetry;
+            Logger::debug("Module voltage: %f", moduleTelemetry.moduleVoltage);
+            Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", moduleTelemetry.lowCell, moduleTelemetry.highCell);
+
+            packVoltageSum += moduleTelemetry.moduleVoltage;
+            if (moduleTelemetry.lowCell < lowCell) lowCell = moduleTelemetry.lowCell;
+            if (moduleTelemetry.highCell > highCell) highCell = moduleTelemetry.highCell;
+
+            if (isfinite(moduleTelemetry.lowTemp)) {
+                if (moduleTelemetry.lowTemp < candidateLowestPackTemp) {
+                    candidateLowestPackTemp = moduleTelemetry.lowTemp;
                 }
-                if (isfinite(moduleTelemetry.highTemp)) {
-                    if (moduleTelemetry.highTemp > highestPackTempHistory_) {
-                        highestPackTempHistory_ = moduleTelemetry.highTemp;
-                    }
-                    anyTemperatureData = true;
-                }
-
-                // Track temperature sensor faults
-                if (moduleTelemetry.tempSensor0Fault || moduleTelemetry.tempSensor1Fault) {
-                    anyTempSensorFaults = true;
-                }
-
-                anyData = true;
-                modulesRead++;
-                commStats_[x].successCount++;
+                anyTemperatureData = true;
             }
-            else
-            {
-                Logger::warn("Failed to read telemetry from module %i", x);
-                modulesFailed++;
-                commStats_[x].failureCount++;
+            if (isfinite(moduleTelemetry.highTemp)) {
+                if (moduleTelemetry.highTemp > candidateHighestPackTemp) {
+                    candidateHighestPackTemp = moduleTelemetry.highTemp;
+                }
+                anyTemperatureData = true;
             }
+
+            if (moduleTelemetry.tempSensor0Fault || moduleTelemetry.tempSensor1Fault) {
+                anyTempSensorFaults = true;
+            }
+
+            modulesRead++;
+            commStats_[x].successCount++;
+        }
+        else
+        {
+            Logger::warn("Failed to read telemetry from module %i", x);
+            modulesFailed++;
+            moduleTelemetry = previousTelemetry.modules[x];
+            moduleTelemetry.present = true;
+            commStats_[x].failureCount++;
         }
 
         newTelemetry.modules[x] = moduleTelemetry;
@@ -408,29 +418,54 @@ bool BMSModuleManager::collectTelemetry()
         Logger::debug("Telemetry collection: %d modules read successfully", modulesRead);
     }
 
-    if (anyData && Pstring > 0)
+    bool allModulesResponded = (modulesPresent > 0) &&
+                               (modulesFailed == 0) &&
+                               (modulesRead == modulesPresent);
+
+    if (allModulesResponded && Pstring > 0)
     {
         newTelemetry.packVoltage = packVoltageSum / static_cast<float>(Pstring);
         newTelemetry.lowestCell = lowCell;
         newTelemetry.highestCell = highCell;
         newTelemetry.cellDelta = highCell - lowCell;
 
-        if (newTelemetry.packVoltage > highestPackVoltHistory_) highestPackVoltHistory_ = newTelemetry.packVoltage;
-        if (newTelemetry.packVoltage < lowestPackVoltHistory_) lowestPackVoltHistory_ = newTelemetry.packVoltage;
+        if (newTelemetry.packVoltage > candidateHighestPackVolt) {
+            candidateHighestPackVolt = newTelemetry.packVoltage;
+        }
+        if (newTelemetry.packVoltage < candidateLowestPackVolt) {
+            candidateLowestPackVolt = newTelemetry.packVoltage;
+        }
+
+        lowestPackVoltHistory_ = candidateLowestPackVolt;
+        highestPackVoltHistory_ = candidateHighestPackVolt;
+        lowestPackTempHistory_ = candidateLowestPackTemp;
+        highestPackTempHistory_ = candidateHighestPackTemp;
+
         newTelemetry.lowestPackVolt = lowestPackVoltHistory_;
         newTelemetry.highestPackVolt = highestPackVoltHistory_;
-
         newTelemetry.lowestPackTemp = anyTemperatureData ? lowestPackTempHistory_ : NAN;
         newTelemetry.highestPackTemp = anyTemperatureData ? highestPackTempHistory_ : NAN;
         newTelemetry.hasData = true;
     }
-    else
+    else if (modulesPresent == 0)
     {
         newTelemetry.hasData = false;
         newTelemetry.packVoltage = 0.0f;
         newTelemetry.lowestCell = 0.0f;
         newTelemetry.highestCell = 0.0f;
         newTelemetry.cellDelta = 0.0f;
+        newTelemetry.lowestPackTemp = NAN;
+        newTelemetry.highestPackTemp = NAN;
+    }
+    else
+    {
+        if (modulesFailed > 0) {
+            Logger::warn("Skipping pack telemetry update due to %d module read failures (out of %d present)",
+                         modulesFailed,
+                         modulesPresent);
+        } else if (Pstring == 0) {
+            Logger::warn("Skipping pack telemetry update because configured parallel string count is zero");
+        }
     }
 
     newTelemetry.faultPinActive = (digitalRead(PIN_BMS_FAULT) == LOW);
@@ -441,8 +476,19 @@ bool BMSModuleManager::collectTelemetry()
     }
     isFaulted_ = newTelemetry.faultPinActive;
 
-    newTelemetry.anyTempSensorFaults = anyTempSensorFaults;
-    if (anyTempSensorFaults) {
+    bool combinedTempSensorFaults = anyTempSensorFaults;
+    if (!combinedTempSensorFaults) {
+        for (int i = 1; i <= MAX_MODULE_ADDR; i++) {
+            const ModuleTelemetry &module = newTelemetry.modules[i];
+            if (module.present && module.telemetryValid &&
+                (module.tempSensor0Fault || module.tempSensor1Fault)) {
+                combinedTempSensorFaults = true;
+                break;
+            }
+        }
+    }
+    newTelemetry.anyTempSensorFaults = combinedTempSensorFaults;
+    if (newTelemetry.anyTempSensorFaults) {
         Logger::warn("One or more temperature sensors are reporting invalid readings");
     }
 
