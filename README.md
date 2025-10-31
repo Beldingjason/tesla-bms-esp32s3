@@ -119,7 +119,75 @@ See [ESP32-S3 T-Display pinout diagram](images/esp32-pinout.jpg) for full GPIO m
 
 ## Software Installation
 
-### Prerequisites
+You can build this project using either **PlatformIO** (recommended) or **Arduino IDE**.
+
+### Method 1: PlatformIO (Recommended)
+
+PlatformIO provides better dependency management, faster builds, and easier project configuration.
+
+#### Prerequisites
+
+1. **Install PlatformIO**
+   - **VS Code:** Install PlatformIO IDE extension from Extensions marketplace
+   - **CLI:** Install via pip: `pip install platformio`
+   - Documentation: [https://platformio.org/install](https://platformio.org/install)
+
+#### Installation Steps
+
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/yourusername/tesla-bms-esp32s3.git
+   cd tesla-bms-esp32s3
+   ```
+
+2. **Open in PlatformIO**
+   - **VS Code:** File → Open Folder → Select project directory
+   - **CLI:** Navigate to project directory
+
+3. **Configure Your BMS Setup**
+   - Edit `include/bms_config.h` to match your battery configuration
+   - Modify settings (see Configuration section below)
+   - Save changes
+
+4. **Build the Project**
+   ```bash
+   pio run
+   ```
+   Or click "Build" in PlatformIO toolbar (VS Code)
+
+5. **Upload to Board**
+   ```bash
+   pio run --target upload
+   ```
+   Or click "Upload" in PlatformIO toolbar (VS Code)
+
+6. **Monitor Serial Output**
+   ```bash
+   pio device monitor
+   ```
+   Or click "Serial Monitor" in PlatformIO toolbar (VS Code)
+
+#### PlatformIO Configuration
+
+The project includes a `platformio.ini` file with optimized settings:
+
+```ini
+[env:lilygo-t-display-s3]
+platform = espressif32
+board = lilygo-t-display-s3
+framework = arduino
+monitor_speed = 115200
+lib_deps =
+    lvgl/lvgl@^8.3.0
+```
+
+All dependencies are automatically managed by PlatformIO.
+
+---
+
+### Method 2: Arduino IDE
+
+#### Prerequisites
 
 1. **Arduino IDE** (v2.0 or later)
    - Download: [https://www.arduino.cc/en/software](https://www.arduino.cc/en/software)
@@ -133,7 +201,7 @@ See [ESP32-S3 T-Display pinout diagram](images/esp32-pinout.jpg) for full GPIO m
    - **LVGL** (v8.x) - Graphics library for LCD display
    - Install path: Tools → Manage Libraries → Search "lvgl"
 
-### Installation Steps
+#### Installation Steps
 
 1. **Clone or Download Repository**
    ```bash
@@ -159,20 +227,6 @@ See [ESP32-S3 T-Display pinout diagram](images/esp32-pinout.jpg) for full GPIO m
    - Click "Upload" button (→) or Ctrl+U
    - Wait for compilation and upload to complete
    - Monitor serial output at 115200 baud
-
-### PlatformIO (Alternative)
-
-If using PlatformIO instead of Arduino IDE:
-
-```ini
-[env:lilygo-t-display-s3]
-platform = espressif32
-board = lilygo-t-display-s3
-framework = arduino
-lib_deps =
-    lvgl/lvgl@^8.3.0
-monitor_speed = 115200
-```
 
 ---
 
@@ -485,20 +539,32 @@ Where:
 
 ```
 tesla-bms-esp32s3/
-├── tesla-bms-esp32s3.ino    # Main Arduino sketch
-├── config.h                 # Global configuration loader
-├── bms_config.h            # BMS settings and constants
-├── pin_config.h            # Hardware pin definitions
-├── constants.h             # Named constants (magic numbers)
-├── BMSModule.cpp/h         # Individual module interface
-├── BMSModuleManager.cpp/h  # Pack-level management
-├── BMSUtil.h               # Low-level communication
-├── Logger.cpp/h            # Logging system
-├── SerialConsole.cpp/h     # Debug console
-├── factory_gui.cpp/h       # LCD GUI interface
-├── font_Alibaba.c          # Display font data
-└── images/                 # Documentation images
+├── platformio.ini              # PlatformIO configuration
+├── tesla-bms-esp32s3.ino       # Arduino IDE sketch (legacy)
+├── src/                        # Source files (PlatformIO)
+│   ├── main.cpp                # Main application (copy of .ino)
+│   ├── BMSModule.cpp           # Individual module interface
+│   ├── BMSModuleManager.cpp    # Pack-level management
+│   ├── Logger.cpp              # Logging system
+│   ├── SerialConsole.cpp       # Debug console
+│   ├── factory_gui.cpp         # LCD GUI interface
+│   └── font_Alibaba.c          # Display font data
+├── include/                    # Header files (PlatformIO)
+│   ├── config.h                # Global configuration loader
+│   ├── bms_config.h            # BMS settings and constants
+│   ├── pin_config.h            # Hardware pin definitions
+│   ├── constants.h             # Named constants (magic numbers)
+│   ├── BMSModule.h             # Module interface header
+│   ├── BMSModuleManager.h      # Manager header
+│   ├── BMSUtil.h               # Low-level communication
+│   ├── Logger.h                # Logging header
+│   ├── SerialConsole.h         # Console header
+│   └── factory_gui.h           # GUI header
+├── lib/                        # Custom libraries (if any)
+└── images/                     # Documentation images
 ```
+
+**Note:** The project supports both PlatformIO (using `src/` and `include/`) and Arduino IDE (using root `.ino` and `.cpp/.h` files).
 
 ### Code Architecture
 
