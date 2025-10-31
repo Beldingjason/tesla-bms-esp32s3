@@ -47,10 +47,14 @@ void BMSModuleManager::balanceCells()
         float moduleHigh = modules[address].getHighCellV();
         if (moduleHigh < BMS_BALANCE_VOLTAGE_MIN) {
             modulesSkippedLowVoltage++;
+            telemetry_.modules[address].isBalancing = false;
+            telemetry_.modules[address].balancingCellMask = 0;
             continue;
         }
         if (moduleLow <= 0.0f) {
             modulesSkippedInvalidData++;
+            telemetry_.modules[address].isBalancing = false;
+            telemetry_.modules[address].balancingCellMask = 0;
             continue;
         }
         if ((moduleHigh - moduleLow) < BMS_BALANCE_VOLTAGE_DELTA) {
@@ -416,6 +420,9 @@ bool BMSModuleManager::collectTelemetry()
             modulesFailed++;
             moduleTelemetry = previousTelemetry.modules[x];
             moduleTelemetry.present = true;
+            moduleTelemetry.telemetryValid = false;
+            moduleTelemetry.isBalancing = false;
+            moduleTelemetry.balancingCellMask = 0;
             commStats_[x].failureCount++;
         }
 
@@ -512,9 +519,9 @@ bool BMSModuleManager::collectTelemetry()
     Logger::info("collectTelemetry() completed in %u ms (modules: present=%d, read=%d, failed=%d)",
                  elapsedMs, modulesPresent, modulesRead, modulesFailed);
     // Warn if execution time is approaching watchdog timeout
-    if (elapsedMs > (WDT_TIMEOUT * 1000) / 2) {
+    if (elapsedMs > (WATCHDOG_TIMEOUT_SEC * 1000) / 2) {
         Logger::warn("collectTelemetry() took %u ms, approaching watchdog timeout of %d seconds",
-                     elapsedMs, WDT_TIMEOUT);
+                     elapsedMs, WATCHDOG_TIMEOUT_SEC);
     }
 #endif
 
@@ -621,10 +628,10 @@ void BMSModuleManager::setSensors(int sensor, float Ignore)
       return;
   }
 
-  // Validate Ignore parameter (should be a reasonable cell voltage or 0)
-  if (Ignore < 0.0f || (Ignore > 0.0f && Ignore < VOLTAGE_SETPOINT_MIN)) {
-      Logger::error("Invalid ignore cell voltage %f (must be 0 or >= %f)",
-                    Ignore, VOLTAGE_SETPOINT_MIN);
+  // Validate Ignore parameter (must be non-negative and not exceed max cell voltage)
+  if (Ignore < 0.0f || Ignore > VOLTAGE_SETPOINT_MAX) {
+      Logger::error("Invalid ignore cell voltage %f (valid range: 0 - %.2fV)",
+                    Ignore, VOLTAGE_SETPOINT_MAX);
       return;
   }
 

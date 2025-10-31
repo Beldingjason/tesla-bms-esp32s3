@@ -209,4 +209,7 @@
 // Set to 1 to enable detailed timing logs for watchdog verification
 #define ENABLE_TIMING_INSTRUMENTATION 0
 
+// Global watchdog timeout (seconds). Used by main loop and diagnostics.
+#define WATCHDOG_TIMEOUT_SEC 10
+
 #endif // CONSTANTS_H_

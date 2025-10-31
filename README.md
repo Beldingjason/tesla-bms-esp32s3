@@ -225,7 +225,7 @@ settings.balanceVoltage = 4.1;     // Target balance voltage
 settings.balanceHyst = 0.04;       // Balance hysteresis
 ```
 
-**Note:** Currently these must be set in code. EEPROM persistence is planned for future release.
+**Note:** Currently these must be set in code. `IgnoreVolt` accepts values from 0.0 V up to 4.3 V. EEPROM persistence is planned for future release.
 
 ### WiFi Configuration (Optional - pin_config.h)
 
@@ -379,7 +379,7 @@ Connect via USB serial at 115200 baud to access debug console.
 **Watchdog resets (constant rebooting)**
 - Indicates system hang or timeout
 - Check for infinite loops or blocking code
-- Increase `WDT_TIMEOUT` in `.ino` file if needed
+- Increase `WATCHDOG_TIMEOUT_SEC` in `constants.h` if needed
 - Review serial output for error messages before reset
 
 **Balancing not working**

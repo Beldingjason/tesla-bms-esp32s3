@@ -19,9 +19,6 @@
 #include "HardwareSerial.h"
 HardwareSerial SERIALBMS(0);
 
-// Watchdog timeout in seconds
-#define WDT_TIMEOUT 10
-
 #include "BMSModuleManager.h"
 #include "Logger.h"
 
@@ -113,7 +110,7 @@ static void configurePowerRails() {
 }
 
 static void configureWatchdog() {
-  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_init(WATCHDOG_TIMEOUT_SEC, true);
   esp_task_wdt_add(NULL); // Add current thread to WDT watch
 }
 
