@@ -15,6 +15,7 @@
 #include <stdio.h>
 
 #include "driver/gpio.h"
+#include "driver/spi_master.h"
 #include "esp_task_wdt.h"
 #include "HardwareSerial.h"
 HardwareSerial SERIALBMS(0);
@@ -104,8 +105,10 @@ static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_
 }
 
 static void configurePowerRails() {
-  pinMode(PIN_POWER_ON, OUTPUT);
-  digitalWrite(PIN_POWER_ON, HIGH);
+  if (PIN_POWER_ON >= 0) {
+    pinMode(PIN_POWER_ON, OUTPUT);
+    digitalWrite(PIN_POWER_ON, HIGH);
+  }
   pinMode(PIN_BMS_FAULT, INPUT_PULLUP);
 }
 
@@ -127,6 +130,7 @@ static void configureTimeServices() {
 }
 
 static esp_lcd_panel_handle_t initializeDisplayHardware() {
+#if TESLA_BMS_LCD_BUS == TESLA_BMS_LCD_BUS_I80
   pinMode(PIN_LCD_RD, OUTPUT);
   digitalWrite(PIN_LCD_RD, HIGH);
 
@@ -150,7 +154,21 @@ static esp_lcd_panel_handle_t initializeDisplayHardware() {
       .max_transfer_bytes = LVGL_LCD_BUF_SIZE * sizeof(uint16_t),
   };
   ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_config, &i80_bus));
+#elif TESLA_BMS_LCD_BUS == TESLA_BMS_LCD_BUS_SPI
+  spi_bus_config_t bus_config = {
+      .mosi_io_num = PIN_LCD_MOSI,
+      .miso_io_num = -1,
+      .sclk_io_num = PIN_LCD_SCLK,
+      .quadwp_io_num = -1,
+      .quadhd_io_num = -1,
+      .max_transfer_sz = LVGL_LCD_BUF_SIZE * sizeof(uint16_t),
+  };
+  ESP_ERROR_CHECK(spi_bus_initialize(LCD_SPI_HOST, &bus_config, SPI_DMA_CH_AUTO));
+#else
+#error "Unsupported display bus"
+#endif
 
+#if TESLA_BMS_LCD_BUS == TESLA_BMS_LCD_BUS_I80
   esp_lcd_panel_io_i80_config_t io_config = {
       .cs_gpio_num = PIN_LCD_CS,
       .pclk_hz = EXAMPLE_LCD_PIXEL_CLOCK_HZ,
@@ -168,6 +186,20 @@ static esp_lcd_panel_handle_t initializeDisplayHardware() {
           },
   };
   ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &io_config, &io_handle));
+#elif TESLA_BMS_LCD_BUS == TESLA_BMS_LCD_BUS_SPI
+  esp_lcd_panel_io_spi_config_t io_config = {
+      .cs_gpio_num = PIN_LCD_CS,
+      .dc_gpio_num = PIN_LCD_DC,
+      .spi_mode = 0,
+      .pclk_hz = EXAMPLE_LCD_PIXEL_CLOCK_HZ,
+      .trans_queue_depth = 20,
+      .on_color_trans_done = example_notify_lvgl_flush_ready,
+      .user_ctx = &disp_drv,
+      .lcd_cmd_bits = 8,
+      .lcd_param_bits = 8,
+  };
+  ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI_HOST, &io_config, &io_handle));
+#endif
 
   esp_lcd_panel_handle_t panel_handle = NULL;
   esp_lcd_panel_dev_config_t panel_config = {
@@ -178,10 +210,10 @@ static esp_lcd_panel_handle_t initializeDisplayHardware() {
   ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
   esp_lcd_panel_reset(panel_handle);
   esp_lcd_panel_init(panel_handle);
-  esp_lcd_panel_invert_color(panel_handle, true);
-  esp_lcd_panel_swap_xy(panel_handle, true);
-  esp_lcd_panel_mirror(panel_handle, false, true);
-  esp_lcd_panel_set_gap(panel_handle, 0, LCD_PANEL_GAP_OFFSET);
+  esp_lcd_panel_invert_color(panel_handle, LCD_PANEL_INVERT_COLORS);
+  esp_lcd_panel_swap_xy(panel_handle, LCD_PANEL_SWAP_XY);
+  esp_lcd_panel_mirror(panel_handle, LCD_PANEL_MIRROR_X, LCD_PANEL_MIRROR_Y);
+  esp_lcd_panel_set_gap(panel_handle, LCD_PANEL_GAP_X, LCD_PANEL_GAP_Y);
 
   return panel_handle;
 }

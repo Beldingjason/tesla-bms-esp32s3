@@ -19,10 +19,16 @@ This project has been configured to work with PlatformIO for easier dependency m
    cd tesla-bms-esp32s3
    pio run
    ```
+   This builds the default environment: `lilygo-t-display-s3`.
 
 3. **Upload to Board**
    ```bash
-   pio run --target upload
+   pio run -e lilygo-t-display-s3 --target upload
+   ```
+
+   For the Waveshare `ESP32-S3-LCD-1.3-B` target:
+   ```bash
+   pio run -e esp32-s3-lcd-1_3-b --target upload
    ```
 
 4. **Monitor Serial Output**
@@ -36,6 +42,8 @@ The project now follows PlatformIO conventions:
 
 ```
 tesla-bms-esp32s3/
+├── boards/            # Custom PlatformIO board definitions
+│   └── esp32-s3-lcd-1_3-b.json
 ├── platformio.ini      # Project configuration
 ├── src/                # Source files (.cpp, .c)
 │   └── main.cpp        # Main application (renamed from .ino)
@@ -52,22 +60,41 @@ tesla-bms-esp32s3/
 The `platformio.ini` file contains all build configuration:
 
 ```ini
-[env:lilygo-t-display-s3]
+[platformio]
+default_envs = lilygo-t-display-s3
+
+[env]
 platform = espressif32
-board = lilygo-t-display-s3
 framework = arduino
 monitor_speed = 115200
-lib_deps = lvgl/lvgl@^8.3.0
+
+[env:lilygo-t-display-s3]
+board = lilygo-t-display-s3
+build_flags =
+    ${env.build_flags}
+    -DTESLA_BMS_TARGET_LILYGO_T_DISPLAY_S3
+
+[env:esp32-s3-lcd-1_3-b]
+board = esp32-s3-lcd-1_3-b
+build_flags =
+    ${env.build_flags}
+    -DTESLA_BMS_TARGET_ESP32_S3_LCD_1_3_B
 ```
 
 ### Board Settings
 
-- **Target:** LilyGO T-Display-S3 (ESP32-S3)
+- **Default target:** LilyGO T-Display-S3 (ESP32-S3)
+- **Additional target:** Waveshare ESP32-S3-LCD-1.3-B
 - **Framework:** Arduino
 - **Upload Speed:** 921600 baud
 - **Monitor Speed:** 115200 baud
 - **CPU Frequency:** 240 MHz
 - **Flash Mode:** QIO
+
+### Supported Environments
+
+- `lilygo-t-display-s3` - LilyGO T-Display-S3 with the existing 8-bit i80 LCD path
+- `esp32-s3-lcd-1_3-b` - Waveshare ESP32-S3-LCD-1.3-B with SPI ST7789 LCD path
 
 ### Build Flags
 
@@ -75,32 +102,42 @@ lib_deps = lvgl/lvgl@^8.3.0
 - `BOARD_HAS_PSRAM` - Enable PSRAM support
 - `ARDUINO_USB_CDC_ON_BOOT=1` - Enable USB CDC on boot
 - `ARDUINO_USB_MODE=1` - Use USB mode
+- `TESLA_BMS_TARGET_LILYGO_T_DISPLAY_S3` - Select LilyGO board pin/display config
+- `TESLA_BMS_TARGET_ESP32_S3_LCD_1_3_B` - Select Waveshare board pin/display config
 
 ## Common Commands
 
-### Build
+### Build Default Target
 ```bash
 pio run
 ```
 
+### Build Specific Target
+```bash
+pio run -e lilygo-t-display-s3
+pio run -e esp32-s3-lcd-1_3-b
+```
+
 ### Upload
 ```bash
-pio run --target upload
+pio run -e lilygo-t-display-s3 --target upload
+pio run -e esp32-s3-lcd-1_3-b --target upload
 ```
 
 ### Clean Build
 ```bash
-pio run --target clean
+pio run -e lilygo-t-display-s3 --target clean
+pio run -e esp32-s3-lcd-1_3-b --target clean
 ```
 
 ### Serial Monitor
 ```bash
-pio device monitor
+pio device monitor -b 115200
 ```
 
 ### Build + Upload + Monitor
 ```bash
-pio run --target upload && pio device monitor
+pio run -e esp32-s3-lcd-1_3-b --target upload && pio device monitor -b 115200
 ```
 
 ### Update Libraries
@@ -129,7 +166,7 @@ If using VS Code with PlatformIO IDE extension:
 
 ### "Board not found"
 
-If PlatformIO doesn't recognize `lilygo-t-display-s3`:
+If PlatformIO doesn't recognize a board environment:
 
 1. Update platform: `pio pkg update -p espressif32`
 2. Or specify platform version in `platformio.ini`:
@@ -144,6 +181,54 @@ If upload fails:
 - Try lower upload speed: `upload_speed = 115200`
 - Check USB cable (must support data transfer)
 - Verify port in `platformio.ini` or use auto-detect
+- Pass the environment explicitly when you have multiple targets:
+  ```bash
+  pio run -e esp32-s3-lcd-1_3-b --target upload --upload-port /dev/ttyACM0
+  ```
+
+For the Waveshare `esp32-s3-lcd-1_3-b` target specifically:
+- The project matches the Waveshare Arduino IDE screenshot settings:
+  - board profile based on `ESP32S3 Dev Module`
+  - `Flash Mode: QIO 80MHz`
+  - `Flash Size: 16MB`
+  - `Partition Scheme: Huge APP (3MB No OTA/1MB SPIFFS)`
+  - `PSRAM: OPI PSRAM`
+  - `USB CDC On Boot: Disabled`
+  - `Upload Mode: UART0 / Hardware CDC`
+  - `Upload Speed: 921600`
+- The board has **no BOOT and no RESET button** — only a USB-C port. It uses a **WCH CH343 USB-UART bridge** (VID:PID `1A86:55D3`), NOT the ESP32-S3's native USB-JTAG. Auto-reset (DTR/RTS → EN/IO0) is wired, so `esptool` can enter download mode on its own; no manual button dance is needed.
+
+#### macOS: install the WCH CH34x driver (required)
+
+macOS's built-in generic USB-CDC driver has timing bugs with the CH343 that cause esptool to fail at the "Uploading stub..." step with:
+
+```
+A fatal error occurred: Failed to write to target RAM (result was 01070000: Operation timed out)
+```
+
+The chip connects and reports its MAC, but every RAM/flash write times out. The fix is to install the **official WCH CH34x macOS driver**:
+
+- Download: https://www.wch-ic.com/downloads/CH34XSER_MAC_ZIP.html
+- Or via Homebrew: `brew install --cask wch-ch34x-usb-serial-driver`
+- Reboot after install. The port name may change from `/dev/cu.usbmodem…` to `/dev/cu.wchusbserial…`.
+
+With the official driver installed, uploads work at the standard `921600` baud — no `--no-stub`, no `esp-builtin`, no special flags.
+
+#### Things that do NOT fix it (don't bother)
+
+- Lowering `upload_speed` to 460800 or 115200 — same stub timeout.
+- `board_upload.use_1200bps_touch = yes` / `wait_for_upload_port = yes` — no effect, this board doesn't use native USB CDC reset.
+- `upload_protocol = esp-builtin` — FAILS with `esp_usb_jtag: could not find or open device!` because the board has no native USB-JTAG, only the CH343 UART bridge.
+- `upload_flags = --no-stub` (with or without `--no-compress` on `write_flash`) — gets further but fails with `Failed to write … after seq 0 (result was 01050000: Requested resource not found)`.
+
+All of these are symptoms of the macOS/CH343 driver issue, not configuration problems. Install the WCH driver and the default config works.
+
+#### Other upload issues to try first (non-driver)
+
+- Connect directly to the computer, not through a hub.
+- Swap to another short USB data cable (many USB-C cables are charge-only).
+- Close any open serial monitors before uploading.
+- Test from another host OS (Windows/Linux) to separate a host-side issue from a board issue.
 
 ### Library Dependencies
 
@@ -217,14 +302,14 @@ Support different boards:
 board = lilygo-t-display-s3
 ...
 
-[env:esp32-dev]
-board = esp32dev
+[env:esp32-s3-lcd-1_3-b]
+board = esp32-s3-lcd-1_3-b
 ...
 ```
 
 Build specific environment:
 ```bash
-pio run -e esp32-dev
+pio run -e esp32-s3-lcd-1_3-b
 ```
 
 ### Serial Port Override
@@ -237,7 +322,7 @@ monitor_port = /dev/ttyUSB0
 
 Or on command line:
 ```bash
-pio run --target upload --upload-port /dev/ttyUSB0
+pio run -e esp32-s3-lcd-1_3-b --target upload --upload-port /dev/ttyUSB0
 ```
 
 ## Resources
@@ -245,11 +330,12 @@ pio run --target upload --upload-port /dev/ttyUSB0
 - **PlatformIO Docs:** https://docs.platformio.org
 - **ESP32 Platform:** https://docs.platformio.org/en/latest/platforms/espressif32.html
 - **Arduino Framework:** https://docs.platformio.org/en/latest/frameworks/arduino.html
-- **Board Definition:** Search "lilygo-t-display-s3" on https://registry.platformio.org
+- **Board Definitions:** Search for PlatformIO boards on https://registry.platformio.org
+- **Custom Board:** `boards/esp32-s3-lcd-1_3-b.json` in this repo
 
 ## Support
 
 For issues specific to:
 - **PlatformIO setup:** Check PlatformIO documentation
 - **Project code:** See main README.md
-- **Hardware:** See T-Display-S3 documentation
+- **Hardware:** See the T-Display-S3 or Waveshare ESP32-S3-LCD-1.3 documentation, depending on target
