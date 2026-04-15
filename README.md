@@ -1,8 +1,8 @@
-# Tesla BMS for ESP32-S3 T-Display
+# Tesla BMS for ESP32-S3
 
 ![BMS in action](./images/bms.jpg)
 
-Battery Management System interface for Tesla Model S/X battery modules (2012-2020) using the ESP32-S3 T-Display board with integrated LCD screen.
+Battery Management System interface for Tesla Model S/X battery modules (2012-2020). Runs on either the **LilyGO T-Display-S3** or the **Waveshare ESP32-S3-LCD-1.3-B**, with optional WiFi + MQTT publishing to **Home Assistant** (auto-discovery).
 
 ## ⚠️ SAFETY WARNING
 
@@ -39,22 +39,31 @@ Tesla battery modules operate at potentially lethal voltages (up to 24V per modu
 - ✓ Color LCD display with rotating pages:
   - Time display (when WiFi enabled)
   - BMS status and metrics
-  - Debug information
+  - Debug information (chip stats, battery voltage, network status line)
 - ✓ USB serial console for debugging and diagnostics
 - ✓ Support for up to 62 modules in series/parallel configurations
 - ✓ Watchdog timer protection against system hangs
 - ✓ CRC-validated communication with BMS modules
+- ✓ **WiFi + MQTT publishing** with Home Assistant auto-discovery (multi-pack safe)
+- ✓ **Two supported boards**: LilyGO T-Display-S3 and Waveshare ESP32-S3-LCD-1.3-B
 
 ---
 
 ## Hardware Requirements
 
 ### ESP32 Development Board
-- **Board:** LilyGO T-Display-S3 (ESP32-S3 with integrated 1.9" LCD)
-- **Purchase:** Available on [Amazon](https://www.amazon.com/s?k=lilygo+t-display+s3) and [AliExpress](https://www.aliexpress.com/wholesale?SearchText=lilygo+t-display+s3)
-- **Specifications:** [GitHub - T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3)
-- **Power:** USB-C (5V) or battery input
-- **Display:** 170x320 ST7789V LCD (included on board)
+
+Two boards are supported. Pick one PlatformIO env when building (see below).
+
+**Option A — LilyGO T-Display-S3** *(env: `lilygo-t-display-s3`)*
+- ESP32-S3 with integrated 1.9" LCD (170×320 ST7789V, parallel i80 bus)
+- [GitHub - T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3)
+- USB-C with native CDC; usually flashes out of the box on macOS/Linux/Windows.
+
+**Option B — Waveshare ESP32-S3-LCD-1.3-B** *(env: `esp32-s3-lcd-1_3-b`)*
+- ESP32-S3 with integrated 1.3" SPI LCD (240×280 ST7789)
+- [Waveshare product page](https://www.waveshare.com/wiki/ESP32-S3-LCD-1.3)
+- Uses a WCH CH343 USB-serial bridge — **macOS users must install the WCH CH34x driver** before flashing or upload will fail at the stub-upload stage. See `PLATFORMIO_SETUP.md` for the troubleshooting walkthrough.
 
 ### Tesla Battery Modules
 - **Compatible Models:** Tesla Model S/X (2012-2020)
@@ -146,42 +155,42 @@ PlatformIO provides better dependency management, faster builds, and easier proj
 
 3. **Configure Your BMS Setup**
    - Edit `include/bms_config.h` to match your battery configuration
-   - Modify settings (see Configuration section below)
+   - (Optional) Set up WiFi + MQTT credentials in `include/secrets.h` — see *WiFi & MQTT* below
    - Save changes
 
-4. **Build the Project**
+4. **Build the Project — pick your board's env**
    ```bash
-   pio run
+   pio run -e lilygo-t-display-s3      # LilyGO T-Display-S3
+   pio run -e esp32-s3-lcd-1_3-b       # Waveshare ESP32-S3-LCD-1.3-B
    ```
-   Or click "Build" in PlatformIO toolbar (VS Code)
+   Or click "Build" in PlatformIO toolbar (VS Code).
 
 5. **Upload to Board**
    ```bash
-   pio run --target upload
+   pio run -e <env-name> --target upload
    ```
-   Or click "Upload" in PlatformIO toolbar (VS Code)
 
 6. **Monitor Serial Output**
    ```bash
    pio device monitor
    ```
-   Or click "Serial Monitor" in PlatformIO toolbar (VS Code)
 
 #### PlatformIO Configuration
 
-The project includes a `platformio.ini` file with optimized settings:
+The project ships two envs in `platformio.ini`. Both share the same source tree; only board, partition table, and a few build flags differ. Library deps (`lvgl`, `PubSubClient`, `ArduinoJson`) are managed automatically.
 
 ```ini
 [env:lilygo-t-display-s3]
-platform = espressif32
 board = lilygo-t-display-s3
-framework = arduino
-monitor_speed = 115200
-lib_deps =
-    lvgl/lvgl@^8.3.0
+build_flags = ... -DTESLA_BMS_TARGET_LILYGO_T_DISPLAY_S3 -DUSE_MQTT=1
+
+[env:esp32-s3-lcd-1_3-b]
+board = esp32-s3-lcd-1_3-b
+build_flags = ... -DTESLA_BMS_TARGET_ESP32_S3_LCD_1_3_B -DUSE_MQTT=1
+board_build.partitions = huge_app.csv
 ```
 
-All dependencies are automatically managed by PlatformIO.
+`USE_MQTT=1` only **links** the WiFi/MQTT code; networking actually runs only when `WIFI_SSID` is set in `secrets.h`. If you want to strip WiFi/MQTT from the binary entirely, set `-DUSE_MQTT=0` for your env.
 
 ---
 
@@ -281,18 +290,66 @@ settings.balanceHyst = 0.04;       // Balance hysteresis
 
 **Note:** Currently these must be set in code. `IgnoreVolt` accepts values from 0.0 V up to 4.3 V. EEPROM persistence is planned for future release.
 
-### WiFi Configuration (Optional - pin_config.h)
+### WiFi & MQTT Configuration (`include/secrets.h`)
 
-```cpp
-// Enable WiFi features (0=disabled, 1=enabled)
-#define USE_WIFI                 0
+All network credentials live in **one git-ignored file**: `include/secrets.h`. To start, copy the template:
 
-// WiFi credentials (uncomment and set)
-// #define WIFI_SSID               "Your-SSID"
-// #define WIFI_PASSWORD           "Your-Password"
+```bash
+cp include/secrets.example.h include/secrets.h
 ```
 
-**Note:** WiFi support is partially implemented. Display will show time when connected.
+Then edit `include/secrets.h`:
+
+```cpp
+#define WIFI_SSID      "your-ssid"
+#define WIFI_PASSWORD  "your-password"
+
+#define MQTT_HOST      "192.168.1.10"   // your Home Assistant / Mosquitto broker
+#define MQTT_PORT      1883
+#define MQTT_USER      "tesla_bms"
+#define MQTT_PASSWORD  "broker-password"
+
+// Friendly name shown in Home Assistant. Multiple packs auto-derive a unique
+// id from the ESP32's MAC address, so you can flash the same secrets.h to
+// several boards or rename per-pack (e.g. "Tesla BMS Garage").
+#define MQTT_NODE_NAME "Tesla BMS"
+```
+
+**Three modes, controlled by which fields you fill in:**
+
+| Want | `WIFI_SSID` | `MQTT_HOST` | Result |
+|------|-------------|-------------|--------|
+| BMS only, no networking | empty | (any) | WiFi/MQTT skipped at boot |
+| WiFi only (e.g. NTP) | set | empty | WiFi connects, no MQTT |
+| Full HA integration | set | set | Auto-discovery + live telemetry |
+
+The auto-disable check happens at runtime, so the same firmware binary covers all three modes — no rebuild needed when toggling.
+
+### Home Assistant Integration
+
+When `WIFI_SSID` and `MQTT_HOST` are both set, the firmware publishes telemetry via MQTT with [Home Assistant Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery), so entities appear automatically in HA — no YAML required.
+
+**HA-side setup (one-time):**
+1. Install the **Mosquitto broker** add-on (Settings → Add-ons → Add-on Store).
+2. Install the **MQTT** integration (Settings → Devices & Services → Add Integration → MQTT). Use the Mosquitto add-on credentials, or create a dedicated HA user for the ESP32.
+3. Flash the firmware with matching credentials in `secrets.h`. Within ~10 s of boot, a device named after `MQTT_NODE_NAME` appears under Settings → Devices & Services → MQTT.
+
+**Entities published per pack:**
+- Pack: voltage, SoC, low cell, high cell, cell delta, low/high temperature
+- Binary: fault, balancing
+- Per detected module: voltage, cell delta, temperature
+- Availability via MQTT LWT — HA marks the device offline within ~30 s if power is yanked
+
+**Multiple packs on the same network:**
+The MQTT node id is auto-suffixed with the last 4 hex chars of the ESP32's MAC address (e.g. `tesla_bms_garage_a4c1`), so flashing the same `secrets.h` to several boards just works — each appears as a distinct HA device. Set `MQTT_NODE_NAME` differently per board if you want friendly names ("Tesla BMS Garage", "Tesla BMS Shed").
+
+**Topic layout** (for custom clients):
+- `<node_id>/availability` — `online` / `offline` (retained, LWT)
+- `<node_id>/pack/state` — JSON: `v`, `low`, `high`, `delta`, `soc`, `t_low`, `t_high`, `fault`, `balancing`, `modules_online`
+- `<node_id>/module/<n>/state` — JSON: `v`, `low`, `high`, `delta`, `t_low`, `t_high`, `valid`, `balance_mask`
+- Discovery configs published once on connect under `homeassistant/{sensor,binary_sensor}/<node_id>/...`
+
+A more elaborate dashboard — including HACS cards (`bar-card`, `auto-entities`, `mini-graph-card`) that scale automatically to any module count, plus example automations for cell drift / fault / offline alerts — is sketched in `tasks/todo.md` (Phase 6).
 
 ### Debug Configuration (bms_config.h)
 
@@ -331,7 +388,7 @@ Logger::setLoglevel(Logger::Debug);  // Options: Debug, Info, Warn, Error, Off
 **Display Pages** (auto-rotate every 5 seconds):
 1. **Time Display** (WiFi only) - Current time from NTP
 2. **BMS Status** - Voltage, SoC, cell info, balancing status
-3. **Debug Info** - Module details, temperatures
+3. **Debug Info** - Chip stats, battery voltage, network status line (e.g. `net: wifi -65dBm | mqtt ok`)
 
 **LED Indicators:**
 - Built-in LED behavior depends on firmware state
@@ -542,24 +599,30 @@ tesla-bms-esp32s3/
 ├── platformio.ini              # PlatformIO configuration
 ├── tesla-bms-esp32s3.ino       # Arduino IDE sketch (legacy)
 ├── src/                        # Source files (PlatformIO)
-│   ├── main.cpp                # Main application (copy of .ino)
+│   ├── main.cpp                # Main application
 │   ├── BMSModule.cpp           # Individual module interface
 │   ├── BMSModuleManager.cpp    # Pack-level management
 │   ├── Logger.cpp              # Logging system
 │   ├── SerialConsole.cpp       # Debug console
 │   ├── factory_gui.cpp         # LCD GUI interface
+│   ├── NetworkManager.cpp      # WiFi lifecycle (non-blocking, backoff)
+│   ├── MqttPublisher.cpp       # MQTT + Home Assistant discovery
 │   └── font_Alibaba.c          # Display font data
 ├── include/                    # Header files (PlatformIO)
 │   ├── config.h                # Global configuration loader
 │   ├── bms_config.h            # BMS settings and constants
-│   ├── pin_config.h            # Hardware pin definitions
-│   ├── constants.h             # Named constants (magic numbers)
+│   ├── pin_config.h            # Hardware pin definitions (per-board)
+│   ├── constants.h             # Named constants (magic numbers, MQTT timing)
 │   ├── BMSModule.h             # Module interface header
 │   ├── BMSModuleManager.h      # Manager header
 │   ├── BMSUtil.h               # Low-level communication
 │   ├── Logger.h                # Logging header
 │   ├── SerialConsole.h         # Console header
-│   └── factory_gui.h           # GUI header
+│   ├── factory_gui.h           # GUI header
+│   ├── NetworkManager.h        # WiFi lifecycle header
+│   ├── MqttPublisher.h         # MQTT publisher header
+│   ├── secrets.example.h       # Template (committed)
+│   └── secrets.h               # Local creds (gitignored)
 ├── lib/                        # Custom libraries (if any)
 └── images/                     # Documentation images
 ```
@@ -637,13 +700,12 @@ tesla-bms-esp32s3/
 
 ### Current Limitations
 
-1. **WiFi support is incomplete** - Basic framework present but upload not implemented
-2. **EEPROM settings not loaded** - Configuration is compile-time only
-3. **No CAN bus support** - Commented out code exists but not functional
-4. **Single-threaded** - All operations in main loop (no FreeRTOS tasks)
-5. **No data logging** - No SD card or persistent storage
-6. **Fixed SoC calculation** - Linear interpolation, not accurate across full range
-7. **No current sensing** - Voltage-only BMS
+1. **EEPROM settings not loaded** - Configuration is compile-time only (credentials in `secrets.h` are flashed in)
+2. **No CAN bus support** - Commented out code exists but not functional
+3. **Single-threaded** - All operations in main loop (no FreeRTOS tasks)
+4. **No on-device data logging** - No SD card. Long-term history lives in HA via MQTT.
+5. **Fixed SoC calculation** - Linear interpolation, not accurate across full range
+6. **No current sensing** - Voltage-only BMS
 
 ### Known Bugs
 
@@ -652,13 +714,13 @@ tesla-bms-esp32s3/
 
 ### Future Improvements
 
-- [ ] Complete WiFi/MQTT implementation
-- [ ] Add web interface for configuration
-- [ ] Implement EEPROM settings storage
+- [ ] Add web interface for configuration (currently `secrets.h` only)
+- [ ] Persist runtime-tunable settings in NVS (`Preferences`)
 - [ ] Improve SoC calculation with Coulomb counting
 - [ ] Add shunt-based current measurement
 - [ ] Refactor BMSModuleManager (too many responsibilities)
 - [ ] Add FreeRTOS tasks for better performance
+- [ ] Optional MQTT-over-TLS for remote brokers
 
 ---
 

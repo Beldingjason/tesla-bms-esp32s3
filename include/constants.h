@@ -212,4 +212,23 @@
 // Global watchdog timeout (seconds). Used by main loop and diagnostics.
 #define WATCHDOG_TIMEOUT_SEC 10
 
+// =====================================================================
+// NETWORK / MQTT (Home Assistant integration)
+// =====================================================================
+
+// How often to publish telemetry to MQTT (ms). Independent of telemetry
+// poll cadence so we don't flood the broker.
+#define MQTT_PUBLISH_INTERVAL_MS 2000
+
+// MQTT keepalive (seconds). Broker disconnects client if no traffic in 1.5x.
+#define MQTT_KEEPALIVE_SEC 30
+
+// Reconnect backoff bounds (ms).
+#define MQTT_RECONNECT_BACKOFF_MIN_MS 1000
+#define MQTT_RECONNECT_BACKOFF_MAX_MS 30000
+
+// WiFi reconnect backoff bounds (ms).
+#define WIFI_RECONNECT_BACKOFF_MIN_MS 1000
+#define WIFI_RECONNECT_BACKOFF_MAX_MS 30000
+
 #endif // CONSTANTS_H_

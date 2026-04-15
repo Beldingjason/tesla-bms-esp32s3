@@ -24,3 +24,6 @@ Thumbs.db
 *.tmp
 *.bak
 *~
+
+# Secrets (local-only credentials for WiFi + MQTT)
+include/secrets.h

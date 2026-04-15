@@ -17,6 +17,7 @@
 #define MSG_NEW_MIN    2
 #define MSG_NEW_VOLT   3
 #define MSG_NEW_TOUCH_POINT   4
+#define MSG_NET_STATUS 5
 
 #define LV_DELAY(x)                                                                                                                                  \
   do {                                                                                                                                               \

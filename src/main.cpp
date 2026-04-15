@@ -23,9 +23,26 @@ HardwareSerial SERIALBMS(0);
 #include "BMSModuleManager.h"
 #include "Logger.h"
 
+#ifndef USE_MQTT
+#define USE_MQTT 0
+#endif
+
+#if USE_MQTT
+#include "NetworkManager.h"
+#include "MqttPublisher.h"
+#include "secrets.h"
+#endif
+
 // Global instances
 BMSModuleManager bms;
-EEPROMSettings settings; 
+EEPROMSettings settings;
+
+#if USE_MQTT
+namespace {
+NetworkManager networkManager;
+MqttPublisher mqttPublisher;
+}
+#endif
 
 namespace {
 struct AppContext {
@@ -34,6 +51,7 @@ struct AppContext {
   uint32_t nextGuiUpdate = 0;
   uint32_t nextPageSwitch = 0;
   uint32_t nextStatusRefresh = 0;
+  uint32_t nextMqttPublish = 0;
   bool isBalancing = false;
   uint32_t lastBalanceMs = 0;
 };
@@ -65,7 +83,6 @@ static lv_color_t *lv_disp_buf;
 static bool is_initialized_lvgl = false;
 
 void wifi_test(void);
-void timeavailable(struct timeval *t);
 void printLocalTime();
 void SmartConfig();
 
@@ -422,6 +439,21 @@ static void handleGuiUpdates(AppContext &context, uint32_t now) {
 #endif
     uint32_t volt = (analogRead(PIN_BAT_VOLT) * BAT_VOLTAGE_DIVIDER_RATIO * ADC_REFERENCE_VOLTAGE * 1000) / ADC_RESOLUTION;
     lv_msg_send(MSG_NEW_VOLT, &volt);
+
+#if USE_MQTT
+    static char netStatus[64];
+    const bool wifiUp = networkManager.isConnected();
+    const bool mqttUp = mqttPublisher.isConnected();
+    if (!wifiUp) {
+      snprintf(netStatus, sizeof(netStatus), "net: wifi down");
+    } else if (!mqttUp) {
+      snprintf(netStatus, sizeof(netStatus), "net: wifi %ddBm | mqtt --", networkManager.rssi());
+    } else {
+      snprintf(netStatus, sizeof(netStatus), "net: wifi %ddBm | mqtt ok", networkManager.rssi());
+    }
+    lv_msg_send(MSG_NET_STATUS, netStatus);
+#endif
+
     context.nextGuiUpdate = now + GUI_UPDATE_INTERVAL_MS;
   }
 
@@ -477,11 +509,33 @@ void setup() {
 
   configureBmsSubsystem();
 
+#if USE_MQTT
+  // Auto-disable: empty WIFI_SSID in secrets.h means the user has not
+  // configured networking — skip WiFi/MQTT entirely and run BMS-only.
+  if (WIFI_SSID[0] == '\0') {
+    Logger::info("WIFI_SSID empty in secrets.h — networking disabled");
+  } else {
+    networkManager.begin(WIFI_SSID, WIFI_PASSWORD);
+    if (MQTT_HOST[0] == '\0') {
+      Logger::info("MQTT_HOST empty in secrets.h — MQTT disabled (WiFi only)");
+    } else {
+      MqttPublisher::Config mqttCfg;
+      mqttCfg.host = MQTT_HOST;
+      mqttCfg.port = MQTT_PORT;
+      mqttCfg.user = MQTT_USER;
+      mqttCfg.password = MQTT_PASSWORD;
+      mqttCfg.nodeName = MQTT_NODE_NAME;
+      mqttPublisher.begin(mqttCfg);
+    }
+  }
+#endif
+
   const uint32_t now = millis();
   appContext.nextTelemetryPoll = now;
   appContext.nextGuiUpdate = now;
   appContext.nextPageSwitch = now + PAGE_SWITCH_INTERVAL_MS;
   appContext.nextStatusRefresh = now;
+  appContext.nextMqttPublish = now + MQTT_PUBLISH_INTERVAL_MS;
   snprintf(packStatusBuffer, PACK_STATUS_BUFFER_SIZE, "Initializing BMS...");
   moduleStatusBuffer[0] = '\0';
 }
@@ -493,6 +547,25 @@ void loop() {
   const uint32_t now = millis();
   handleTelemetry(appContext, now);
   handleGuiUpdates(appContext, now);
+
+#if USE_MQTT
+  networkManager.loop(now);
+  mqttPublisher.loop(now, networkManager.isConnected());
+
+  if (mqttPublisher.isConnected() && now >= appContext.nextMqttPublish) {
+    const auto &telemetry = bms.getTelemetry();
+    if (telemetry.hasData) {
+      const int soc = computeStateOfChargePercent(telemetry.packVoltage);
+      mqttPublisher.publishPack(telemetry, soc, appContext.isBalancing);
+      for (int i = 1; i <= MAX_MODULE_ADDR; i++) {
+        if (telemetry.modules[i].present) {
+          mqttPublisher.publishModule(i, telemetry.modules[i]);
+        }
+      }
+    }
+    appContext.nextMqttPublish = now + MQTT_PUBLISH_INTERVAL_MS;
+  }
+#endif
 }
 
 #if USE_WIFI
@@ -596,10 +669,4 @@ void printLocalTime() {
     return;
   }
   Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-}
-// Callback function (get's called when time adjusts via NTP)
-void timeavailable(struct timeval *t) {
-  Serial.println("Got time adjustment from NTP!");
-  printLocalTime();
-  WiFi.disconnect();
 }

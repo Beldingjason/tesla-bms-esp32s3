@@ -100,6 +100,12 @@ void ui_begin() {
   lv_obj_add_event_cb(bat_label, update_text_subscriber_cb, LV_EVENT_MSG_RECEIVED, NULL);
   lv_msg_subscribe_obj(MSG_NEW_VOLT, bat_label, (void *)"VOLT : %d mV");
 
+  lv_obj_t *net_label = lv_label_create(tv3);
+  lv_obj_align_to(net_label, bat_label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
+  lv_label_set_text(net_label, "net: --");
+  lv_obj_add_event_cb(net_label, update_touch_point_subscriber_cb, LV_EVENT_MSG_RECEIVED, NULL);
+  lv_msg_subscribe_obj(MSG_NET_STATUS, net_label, (void *)"%s");
+
   // Main BMS info page
   extern lv_obj_t *bms_label;
   bms_label = lv_label_create(tv2);
