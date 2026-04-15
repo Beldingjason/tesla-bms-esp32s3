@@ -228,6 +228,7 @@ void MqttPublisher::publishDiscovery() {
                o["unit_of_meas"] = "V";
                o["dev_cla"] = "voltage";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 2;
              });
 
   publishOne(mqttClient_, "sensor", nodeId_, name, availabilityTopic_,
@@ -238,6 +239,7 @@ void MqttPublisher::publishDiscovery() {
                o["unit_of_meas"] = "%";
                o["dev_cla"] = "battery";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 0;
              });
 
   publishOne(mqttClient_, "sensor", nodeId_, name, availabilityTopic_,
@@ -248,6 +250,7 @@ void MqttPublisher::publishDiscovery() {
                o["unit_of_meas"] = "V";
                o["dev_cla"] = "voltage";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 3;
              });
 
   publishOne(mqttClient_, "sensor", nodeId_, name, availabilityTopic_,
@@ -258,6 +261,7 @@ void MqttPublisher::publishDiscovery() {
                o["unit_of_meas"] = "V";
                o["dev_cla"] = "voltage";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 3;
              });
 
   publishOne(mqttClient_, "sensor", nodeId_, name, availabilityTopic_,
@@ -268,6 +272,7 @@ void MqttPublisher::publishDiscovery() {
                o["unit_of_meas"] = "V";
                o["dev_cla"] = "voltage";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 3;
              });
 
   publishOne(mqttClient_, "sensor", nodeId_, name, availabilityTopic_,
@@ -278,6 +283,7 @@ void MqttPublisher::publishDiscovery() {
                o["unit_of_meas"] = "°C";
                o["dev_cla"] = "temperature";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 1;
              });
 
   publishOne(mqttClient_, "sensor", nodeId_, name, availabilityTopic_,
@@ -288,6 +294,7 @@ void MqttPublisher::publishDiscovery() {
                o["unit_of_meas"] = "°C";
                o["dev_cla"] = "temperature";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 1;
              });
 
   publishOne(mqttClient_, "binary_sensor", nodeId_, name, availabilityTopic_,
@@ -408,6 +415,7 @@ void MqttPublisher::publishModuleDiscovery(int index) {
                o["unit_of_meas"] = "V";
                o["dev_cla"] = "voltage";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 2;
              });
 
   // Cell delta
@@ -421,6 +429,7 @@ void MqttPublisher::publishModuleDiscovery(int index) {
                o["unit_of_meas"] = "V";
                o["dev_cla"] = "voltage";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 3;
              });
 
   // High temp
@@ -434,6 +443,7 @@ void MqttPublisher::publishModuleDiscovery(int index) {
                o["unit_of_meas"] = "°C";
                o["dev_cla"] = "temperature";
                o["stat_cla"] = "measurement";
+               o["sug_dsp_prc"] = 1;
              });
 
   Logger::debug("MqttPublisher: module %d discovery published", index);
