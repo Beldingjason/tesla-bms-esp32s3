@@ -22,7 +22,7 @@ HardwareSerial SERIALBMS(0);
 
 #include "BMSModuleManager.h"
 #include "Logger.h"
-
+/*#define USE_MQTT 0
 #ifndef USE_MQTT
 #define USE_MQTT 0
 #endif
